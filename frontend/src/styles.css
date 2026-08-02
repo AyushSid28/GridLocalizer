@@ -1,0 +1,136 @@
+:root {
+  color-scheme: light;
+  --bg: #e8eef2;
+  --ink: #14212b;
+  --muted: #5a6b78;
+  --panel: #f7fafc;
+  --line: #c5d0d8;
+  --ok: #1f6b4a;
+  --bad: #8b2e2e;
+  --accent: #0b4f6c;
+  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  color: var(--ink);
+  background:
+    radial-gradient(1200px 600px at 10% -10%, #d5e4ec 0%, transparent 55%),
+    radial-gradient(900px 500px at 100% 0%, #cfd9c8 0%, transparent 50%),
+    var(--bg);
+}
+
+.shell {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 1.25rem;
+}
+
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+}
+
+.eyebrow {
+  margin: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+
+h1 {
+  margin: 0.2rem 0 0;
+  font-size: 1.75rem;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+}
+
+.pill {
+  border: 1px solid var(--line);
+  background: var(--panel);
+  padding: 0.4rem 0.75rem;
+  font-size: 0.85rem;
+}
+
+.pill.ok {
+  color: var(--ok);
+  border-color: #9ec9b4;
+}
+
+.pill.bad {
+  color: var(--bad);
+  border-color: #d5a4a4;
+}
+
+.board {
+  display: grid;
+  grid-template-columns: minmax(240px, 340px) 1fr;
+  gap: 1rem;
+  min-height: 70vh;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  padding: 1rem;
+}
+
+.map-panel {
+  min-height: 420px;
+}
+
+.muted {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.stats div {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  padding: 0.75rem 0.9rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.stats strong {
+  font-size: 1.25rem;
+  letter-spacing: -0.02em;
+}
+
+.stats span {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+@media (max-width: 800px) {
+  .board {
+    grid-template-columns: 1fr;
+  }
+
+  .stats {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
