@@ -29,3 +29,16 @@ def init_db() -> None:
     from . import models  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
+
+
+def migrate_db() -> None:
+    """Idempotent schema migrations for columns added after initial table creation."""
+    migrations = [
+        "ALTER TABLE pole_states ADD COLUMN IF NOT EXISTS last_power_restored_seq INTEGER",
+        "ALTER TABLE pole_states ADD COLUMN IF NOT EXISTS last_power_restored_at TIMESTAMPTZ",
+        "ALTER TABLE pole_states ADD COLUMN IF NOT EXISTS last_boot_seq INTEGER",
+        "ALTER TABLE pole_states ADD COLUMN IF NOT EXISTS last_boot_at TIMESTAMPTZ",
+    ]
+    with engine.begin() as conn:
+        for sql in migrations:
+            conn.execute(__import__('sqlalchemy').text(sql))

@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     detect_wait_sec: int = 30
     cors_origins: str = "http://localhost:5173,http://localhost:3000"
     openai_api_key: str = ""
+    groq_api_key: str = ""
 
     @property
     def cors_origin_list(self) -> list[str]:

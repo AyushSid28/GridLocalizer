@@ -99,6 +99,10 @@ class PoleState(Base):
     last_seq: Mapped[int] = mapped_column(Integer, default=-1)
     last_event: Mapped[str | None] = mapped_column(String(32), nullable=True)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_power_restored_seq: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_power_restored_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_boot_seq: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_boot_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     battery_mv: Mapped[int | None] = mapped_column(Integer, nullable=True)
     rssi: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # offline = modem/device problems, not necessarily dark line
@@ -142,6 +146,7 @@ class Incident(Base):
     affected_poles: Mapped[int] = mapped_column(Integer, default=0)
     confidence: Mapped[float] = mapped_column(Float, default=0.0)
     reasons: Mapped[list] = mapped_column(JSONB, default=list)
+    evidence: Mapped[dict | None] = mapped_column(JSONB, nullable=True, default=dict)
     topology_mode: Mapped[str] = mapped_column(String(32), default="recorded")
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
 
