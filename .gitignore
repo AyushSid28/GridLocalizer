@@ -16,3 +16,9 @@ venv/
 coverage/
 htmlcov/
 *.log
+
+# Company brief + internal working notes (not submission artifacts)
+DOCS/
+MAINDOCS/
+backend/package-lock.json
+schedule-state.txt
