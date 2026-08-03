@@ -1,0 +1,9 @@
+backend/app/services/localization.py backend/app/worker.py backend/app/models.py backend/app/db.py backend/app/main.py backend/app/settings.py backend/tests/test_localization.py backend/tests/test_telemetry.py
+backend/app/api/network.py backend/app/api/breadcrumb.py backend/app/api/__init__.py
+backend/app/api/sim.py
+backend/app/api/incidents.py
+frontend/src/App.tsx frontend/src/styles.css frontend/src/api.ts frontend/src/components/Breadcrumb.tsx frontend/src/components/MultifaultSelector.tsx
+docker-compose.yml frontend/nginx.conf
+backend/tests/test_sim.py backend/tests/test_noise.py backend/tests/test_tickets.py backend/tests/test_explain.py
+MAINDOCS/ README.md
+commit-messages.txt commit-paths.txt commit-schedule.sh
