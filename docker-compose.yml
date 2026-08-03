@@ -27,7 +27,7 @@ services:
 
   api:
     build: ./backend
-    env_file: .env.example
+    env_file: .env
     environment:
       DATABASE_URL: postgresql+psycopg://outage:outage@postgres:5432/outage
       REDIS_URL: redis://redis:6379/0
@@ -48,7 +48,7 @@ services:
   worker:
     build: ./backend
     command: ["python", "-m", "app.worker"]
-    env_file: .env.example
+    env_file: .env
     environment:
       DATABASE_URL: postgresql+psycopg://outage:outage@postgres:5432/outage
       REDIS_URL: redis://redis:6379/0
