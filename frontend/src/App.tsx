@@ -105,6 +105,20 @@ function isActiveIncident(incident: Incident) {
   return activeStatuses.includes(incident.status);
 }
 
+/** Map color follows telemetry, not ticket status (ticket can stay open after restore). */
+function dtIsDarkOnMap(dt: DT, allIncidents: Incident[]): boolean {
+  if ((dt.dark_poles ?? 0) > 0) return true;
+  // Feeder-level ticket: also red while any DT on that feeder still reports dark poles
+  // (dark_poles already covered). No ticket-only red after poles are live again.
+  void allIncidents;
+  return false;
+}
+
+function selectedDtHasDarkPoles(detail: DTDetail | null): boolean {
+  if (!detail) return false;
+  return detail.poles.some((p) => p.energized === false);
+}
+
 function getStatusLabel(status: Incident["status"]) {
   const labels: Record<Incident["status"], string> = {
     detected: "Active",
@@ -207,6 +221,7 @@ export default function App() {
   const [showPolesLayer, setShowPolesLayer] = useState(true);
   const [showTransformersLayer, setShowTransformersLayer] = useState(true);
   const [showFaultBoundaries, setShowFaultBoundaries] = useState(true);
+  const [refreshTick, setRefreshTick] = useState(0);
 
   // Poll DB state
   useEffect(() => {
@@ -236,7 +251,7 @@ export default function App() {
     fetchData();
     const interval = setInterval(fetchData, 3000);
     return () => clearInterval(interval);
-  }, [selectedIncident]);
+  }, [selectedIncident, refreshTick]);
 
   // Load detailed DT data when selected
   useEffect(() => {
@@ -253,7 +268,7 @@ export default function App() {
       }
     }
     fetchDTDetail();
-  }, [selectedDTId, incidents]);
+  }, [selectedDTId, incidents, refreshTick]);
 
   // Auto focus map to DT when selecting an incident
   useEffect(() => {
@@ -333,6 +348,9 @@ export default function App() {
         });
       }
       setSimResponse(`Success: ${action === "inject" ? "Outage injected" : "Outage repaired"} (${data.affected_devices} devices affected)`);
+      // Nudge pollers so map colors catch up after worker processes telemetry
+      window.setTimeout(() => setRefreshTick((n) => n + 1), 800);
+      window.setTimeout(() => setRefreshTick((n) => n + 1), 2500);
     } catch (err: any) {
       setSimResponse(`Error: ${err.message}`);
     }
@@ -526,29 +544,33 @@ export default function App() {
         {/* 3. Center Panel - SVG Topology Map */}
         <section className="panel column-center">
           <div className="panel-header map-header">
-            <h2>Grid Topology Map</h2>
-            <div className="layer-controls">
-              <label>
-                <input type="checkbox" checked={showTransformersLayer} onChange={e => setShowTransformersLayer(e.target.checked)} />
-                Transformers
-              </label>
-              <label>
-                <input type="checkbox" checked={showPolesLayer} onChange={e => setShowPolesLayer(e.target.checked)} />
-                Poles
-              </label>
-              <label>
-                <input type="checkbox" checked={showFaultBoundaries} onChange={e => setShowFaultBoundaries(e.target.checked)} />
-                Outage Bounds
-              </label>
-              {selectedDTId && (
-                  <>
-                    <button className="btn-back" onClick={() => { setSelectedDTId(null); setFocusedPole(null); }}>
-                      Return to Grid View
-                    </button>
-                    <Breadcrumb dtId={selectedDTId} apiBase={apiBase} />
-                  </>
+            <div className="map-header-top">
+              <h2>Grid Topology Map</h2>
+              <div className="layer-controls">
+                <label>
+                  <input type="checkbox" checked={showTransformersLayer} onChange={e => setShowTransformersLayer(e.target.checked)} />
+                  Transformers
+                </label>
+                <label>
+                  <input type="checkbox" checked={showPolesLayer} onChange={e => setShowPolesLayer(e.target.checked)} />
+                  Poles
+                </label>
+                <label>
+                  <input type="checkbox" checked={showFaultBoundaries} onChange={e => setShowFaultBoundaries(e.target.checked)} />
+                  Outage Bounds
+                </label>
+                {selectedDTId && (
+                  <button className="btn-back" onClick={() => { setSelectedDTId(null); setFocusedPole(null); }}>
+                    Return to Grid View
+                  </button>
                 )}
+              </div>
             </div>
+            {selectedDTId && (
+              <div className="map-breadcrumb-row">
+                <Breadcrumb dtId={selectedDTId} apiBase={apiBase} />
+              </div>
+            )}
           </div>
 
           <div className="map-canvas-container">
@@ -564,9 +586,9 @@ export default function App() {
               {/* RENDER VIEW 1: Global Grid (All Transformers) */}
               {!selectedDTId && dts.map(dt => {
                 const { x, y } = getCoordinates(dt.lat, dt.lon);
-                // Check if this DT has active incidents
-                const hasActiveIncident = (dt.dark_poles && dt.dark_poles > 0) || incidents.some(
-                  i => i.dt_id === dt.dt_id && isActiveIncident(i)
+                const isDark = dtIsDarkOnMap(dt, incidents);
+                const hasOpenTicket = incidents.some(
+                  (i) => isActiveIncident(i) && (i.dt_id === dt.dt_id || (i.kind === "feeder" && i.feeder_id === dt.feeder_id))
                 );
 
                 return (
@@ -574,7 +596,10 @@ export default function App() {
                     key={dt.dt_id}
                     className="map-node transformer-node"
                     transform={`translate(${x}, ${y})`}
-                    onClick={() => setSelectedDTId(dt.dt_id)}
+                    onClick={() => {
+                      setSelectedDTId(dt.dt_id);
+                      setFocusedPole(null);
+                    }}
                   >
                     <rect
                       x="-12"
@@ -582,7 +607,7 @@ export default function App() {
                       width="24"
                       height="24"
                       rx="3"
-                      className={`transformer-rect ${hasActiveIncident ? "dark" : "live"}`}
+                      className={`transformer-rect ${isDark ? "dark" : "live"}${hasOpenTicket && !isDark ? " ticket-open" : ""}`}
                     />
                     <text y="24" className="node-label" textAnchor="middle">
                       {dt.dt_id}
@@ -633,15 +658,26 @@ export default function App() {
                     {/* Root Node (Transformer itself) */}
                     {showTransformersLayer && (() => {
                       const coord = getCoordinates(selectedDT.lat, selectedDT.lon);
-                      const isFaultedDT = incidents.some(i => i.dt_id === selectedDT.dt_id && i.kind === 'dt' && isActiveIncident(i));
-                      const nodeClass = isFaultedDT ? `map-node transformer-node faulted` : `map-node transformer-node`;
+                      const polesDark = selectedDtHasDarkPoles(selectedDT);
+                      const openDtTicket = incidents.some(
+                        (i) => i.dt_id === selectedDT.dt_id && i.kind === "dt" && isActiveIncident(i)
+                      );
                       return (
                         <g
                           key={`root-${selectedDT.dt_id}`}
-                          className={nodeClass}
+                          className={`map-node transformer-node${polesDark ? " faulted" : ""}`}
                           transform={`translate(${coord.x}, ${coord.y})`}
                         >
-                          <rect x="-14" y="-14" width="28" height="28" rx="4" fill="#5cb85c" stroke="#fff" strokeWidth="1.5" />
+                          <rect
+                            x="-14"
+                            y="-14"
+                            width="28"
+                            height="28"
+                            rx="4"
+                            className={`transformer-rect ${polesDark ? "dark" : "live"}${openDtTicket && !polesDark ? " ticket-open" : ""}`}
+                            stroke="#fff"
+                            strokeWidth="1.5"
+                          />
                           <text y="24" className="node-label" textAnchor="middle">{selectedDT.dt_id}</text>
                         </g>
                       );
@@ -662,7 +698,7 @@ export default function App() {
                     return (
                       <g
                         key={pole.pole_id}
-                        className={`map-node pole-node ${statusColorClass}`}
+                        className={`map-node pole-node ${statusColorClass} ${focusedPole?.pole_id === pole.pole_id ? "selected" : ""}`}
                         transform={`translate(${x}, ${y})`}
                         onClick={() => setFocusedPole(pole)}
                       >
@@ -682,11 +718,29 @@ export default function App() {
         {/* 4. Incident Inspector (Right Column) */}
         <section className="panel column-right">
           <div className="panel-header">
-            <h2>Incident Inspector</h2>
+            <h2>{focusedPole ? "Pole Inspector" : "Incident Inspector"}</h2>
           </div>
 
           <div className="inspector-content">
-            {selectedIncident ? (
+            {focusedPole ? (
+              <div className="pole-details">
+                <div className="pole-quick-card">
+                  <div className="info-row">
+                    <span className="label">Pole ID</span>
+                    <span className="value">{focusedPole.pole_id}</span>
+                  </div>
+                  <div className="info-row">
+                    <span className="label">Attached DT</span>
+                    <span className="value">{selectedDT?.dt_id || "Unknown"}</span>
+                  </div>
+                  <div className="info-row">
+                    <span className="label">Pin</span>
+                    <span className="value">{focusedPole.pincode || "Unknown"}</span>
+                  </div>
+                </div>
+                <button className="btn-back" onClick={() => setFocusedPole(null)}>Close</button>
+              </div>
+            ) : selectedIncident ? (
               <div className="incident-details">
                 <div className="inspector-top">
                   <h3>INCIDENT: #{selectedIncident.id.slice(0, 8).toUpperCase()}</h3>
@@ -755,7 +809,7 @@ export default function App() {
                   {selectedIncident.reasons.length > 0 && (
                     <ul className="evidence-list reason-list">
                       {selectedIncident.reasons.map((reason, i) => (
-                        <li key={"reason-"+i} className="evidence-item">
+                        <li key={"reason-" + i} className="evidence-item">
                           <span className="evidence-marker" /> {reason}
                         </li>
                       ))}
@@ -835,41 +889,6 @@ export default function App() {
                     )}
                   </div>
                 </div>
-
-                {/* Pole Inspector inside Detail Drawer */}
-                {focusedPole && (
-                  <div className="focused-pole-panel">
-                    <h4>Asset Details: {focusedPole.pole_id}</h4>
-                    <div className="pole-stat">
-                      <span>Status</span>
-                      <strong className={focusedPole.energized ? "text-green" : "text-red"}>
-                        {focusedPole.energized ? "LIVE" : "DARK"}
-                      </strong>
-                    </div>
-                    <div className="pole-stat">
-                      <span>Device ID</span>
-                      <span>{focusedPole.device_id || "None"}</span>
-                    </div>
-                    <div className="pole-stat">
-                      <span>Firmware</span>
-                      <span>{focusedPole.firmware || "N/A"}</span>
-                    </div>
-                    <div className="pole-stat">
-                      <span>Last Event</span>
-                      <span>{focusedPole.last_event || "N/A"}</span>
-                    </div>
-                    <div className="pole-stat">
-                      <span>Battery</span>
-                      <span>{focusedPole.battery_mv ? `${focusedPole.battery_mv} mV` : "N/A"}</span>
-                    </div>
-                    <div className="pole-stat">
-                      <span>Sensor</span>
-                      <strong className={focusedPole.suspect_sensor ? "text-yellow" : "text-green"}>
-                        {focusedPole.suspect_sensor ? "SUSPECT" : "HEALTHY"}
-                      </strong>
-                    </div>
-                  </div>
-                )}
               </div>
             ) : (
               <p className="empty-muted">Select an incident to investigate</p>
@@ -961,7 +980,11 @@ export default function App() {
              <MultifaultSelector
                dts={dts}
                feeders={uniqueFeeders}
-               onResult={setSimResponse}
+               onResult={(msg) => {
+                 setSimResponse(msg);
+                 window.setTimeout(() => setRefreshTick((n) => n + 1), 800);
+                 window.setTimeout(() => setRefreshTick((n) => n + 1), 2500);
+               }}
              />
           </div>
         </div>}

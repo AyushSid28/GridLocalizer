@@ -1,41 +1,42 @@
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
-from sqlalchemy import select
+
 from app.db import get_db
+from app.models import DistributionTransformer, Pole, PoleState
 from app.services.topo_index import get_topology
-from app.models import DistributionTransformer, Incident, TicketStatus, FaultKind
 
 router = APIRouter(prefix="/breadcrumb", tags=["breadcrumb"])
 
+
 @router.get("/dt/{dt_id}")
 def get_dt_breadcrumb(dt_id: str, db: Session = Depends(get_db)):
-    """Return hierarchical context for a Distribution Transformer.
-    Includes substation ID (derived from DT ID prefix), feeder ID, DT ID,
-    total pole count, and affected pole count (based on active incident).
-    """
+    """Hierarchy chip for a DT: subdivision › feeder › DT, plus live dark count."""
     dt = db.get(DistributionTransformer, dt_id)
     if not dt:
         raise HTTPException(status_code=404, detail="Transformer not found")
-    # Derive substation ID from DT ID prefix before '-'
-    substation_id = dt_id.split('-')[0] if '-' in dt_id else dt_id
+
+    feeder_bits = dt.feeder_id.split("-")
+    substation_id = f"SD-{feeder_bits[1]}" if len(feeder_bits) >= 2 else "SD-07"
+
     topo = get_topology()
     tree = topo.by_dt.get(dt_id)
     pole_count = len(tree.pole_ids) if tree else 0
-    # Determine affected poles from any active DT incident
-    active_inc = db.scalar(
-        select(Incident)
-        .where(
-            Incident.dt_id == dt_id,
-            Incident.kind == FaultKind.dt,
-            Incident.status.in_([TicketStatus.detected, TicketStatus.acknowledged, TicketStatus.crew_assigned, TicketStatus.resolved])
+
+    dark_now = (
+        db.scalar(
+            select(func.count())
+            .select_from(PoleState)
+            .join(Pole, Pole.id == PoleState.pole_id)
+            .where(Pole.dt_id == dt_id, PoleState.energized.is_(False))
         )
-        .limit(1)
+        or 0
     )
-    affected = active_inc.affected_poles if active_inc else 0
+
     return {
         "substation_id": substation_id,
         "feeder_id": dt.feeder_id,
         "dt_id": dt_id,
         "pole_count": pole_count,
-        "affected_poles": affected,
+        "affected_poles": dark_now,
     }
