@@ -247,11 +247,10 @@ export default function App() {
         setDts(dtData);
         setIncidents(incData);
         
-        // Keep selection updated
-        if (selectedIncident) {
-          const updated: Incident | undefined = incData.find((i: Incident) => i.id === selectedIncident.id);
-          if (updated) setSelectedIncident(updated);
-        }
+        setSelectedIncident((current) => {
+          if (!current) return current;
+          return incData.find((i: Incident) => i.id === current.id) ?? current;
+        });
       } catch (err) {
         console.error("Error polling data", err);
       }
@@ -260,7 +259,7 @@ export default function App() {
     fetchData();
     const interval = setInterval(fetchData, 3000);
     return () => clearInterval(interval);
-  }, [selectedIncident, refreshTick]);
+  }, [refreshTick]);
 
   // Load detailed DT data when selected
   useEffect(() => {
@@ -379,6 +378,7 @@ export default function App() {
       // Nudge pollers so map colors catch up after worker processes telemetry
       window.setTimeout(() => setRefreshTick((n) => n + 1), 800);
       window.setTimeout(() => setRefreshTick((n) => n + 1), 2500);
+      window.setTimeout(() => setRefreshTick((n) => n + 1), 4500);
     } catch (err: any) {
       setSimResponse(`Error: ${err.message}`);
     }
@@ -408,16 +408,7 @@ export default function App() {
       return;
     }
     try {
-      const res = await fetch(`${apiBase}/sim/clear_noise`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ target_id: simNoiseTarget }),
-      });
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        throw new Error(getApiErrorMessage(errData, `HTTP error ${res.status}`));
-      }
-      const data = await res.json();
+      const data = await api.clearNoise({ target_id: simNoiseTarget });
       setSimResponse(`Success: Telemetry restored on pole ${data.target_id}`);
     } catch (err: any) {
       setSimResponse(`Error: ${err.message}`);
@@ -1029,10 +1020,12 @@ export default function App() {
              <MultifaultSelector
                dts={dts}
                feeders={uniqueFeeders}
+               incidents={incidents}
                onResult={(msg) => {
                  setSimResponse(msg);
                  window.setTimeout(() => setRefreshTick((n) => n + 1), 800);
                  window.setTimeout(() => setRefreshTick((n) => n + 1), 2500);
+                 window.setTimeout(() => setRefreshTick((n) => n + 1), 4500);
                }}
              />
           </div>

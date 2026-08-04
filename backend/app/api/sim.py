@@ -41,6 +41,10 @@ class NoiseInjectionIn(BaseModel):
     target_id: str  # pole_id / device_id
 
 
+class ClearNoiseIn(BaseModel):
+    target_id: str
+
+
 def get_redis_client():
     settings = get_settings()
     client = redis.from_url(settings.redis_url, decode_responses=True)
@@ -131,23 +135,18 @@ def inject_fault(
         state = db.get(PoleState, p.id)
         fw = state.firmware if state else "1.4.2"
 
-        # Telemetry Stream event (skip power_lost for fw 1.2 to simulate heartbeat silence)
-        if fw and fw.startswith("1.2"):
-            # Omit stream message, simulating silence
-            pass
-        else:
-            publish_event(
-                r,
-                settings.telemetry_stream,
-                p,
-                "power_lost",
-                False,
-                next_seq(state),
-                now,
-                fw,
-                3400,
-                -85,
-            )
+        publish_event(
+            r,
+            settings.telemetry_stream,
+            p,
+            "power_lost",
+            False,
+            next_seq(state),
+            now,
+            fw,
+            3400,
+            -85,
+        )
 
         affected_count += 1
 
@@ -238,12 +237,13 @@ def inject_noise(
 
     if data.kind == "dead_sensor":
         if pole.device_id:
+            current_energized = state.energized if state and state.energized is not None else True
             publish_event(
                 r,
                 settings.telemetry_stream,
                 pole,
                 "heartbeat",
-                False,
+                current_energized,
                 next_seq(state),
                 datetime.now(timezone.utc) - timedelta(seconds=400),
                 fw,
@@ -319,6 +319,38 @@ def inject_noise(
         raise HTTPException(400, f"Unsupported noise kind: {data.kind}")
 
 
+@router.post("/clear_noise", status_code=status.HTTP_202_ACCEPTED)
+def clear_noise(
+    data: ClearNoiseIn,
+    db: Session = Depends(get_db),
+    r: redis.Redis = Depends(get_redis_client),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    pole = db.get(Pole, data.target_id)
+    if not pole:
+        raise HTTPException(404, f"Pole {data.target_id} not found")
+
+    state = db.get(PoleState, pole.id)
+    fw = state.firmware if state else "1.4.2"
+
+    if pole.device_id:
+        publish_event(
+            r,
+            settings.telemetry_stream,
+            pole,
+            "heartbeat",
+            True,
+            next_seq(state),
+            datetime.now(timezone.utc),
+            fw,
+            3800,
+            -70,
+        )
+        r.set(f"dt_dirty:{pole.dt_id}", time.time())
+
+    return {"noise_cleared": True, "target_id": pole.id}
+
+
 @router.post("/scenario", status_code=status.HTTP_202_ACCEPTED)
 def run_scenario(
     data: ScenarioIn,
@@ -359,21 +391,18 @@ def run_scenario(
                 pole_offset = published_by_pole.get(p.id, 0) + 1
                 published_by_pole[p.id] = pole_offset
 
-                if fw and fw.startswith("1.2"):
-                    pass
-                else:
-                    publish_event(
-                        r,
-                        settings.telemetry_stream,
-                        p,
-                        "power_lost",
-                        False,
-                        next_seq(state, pole_offset),
-                        now,
-                        fw,
-                        3400,
-                        -85,
-                    )
+                publish_event(
+                    r,
+                    settings.telemetry_stream,
+                    p,
+                    "power_lost",
+                    False,
+                    next_seq(state, pole_offset),
+                    now,
+                    fw,
+                    3400,
+                    -85,
+                )
 
                 total_affected += 1
 

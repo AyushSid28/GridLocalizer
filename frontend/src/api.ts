@@ -61,6 +61,19 @@ export async function injectNoise(payload: any) {
   return res.json();
 }
 
+export async function clearNoise(payload: any) {
+  const res = await fetch(`${apiBase}/sim/clear_noise`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err?.detail ?? `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
 export async function repairSimulation(payload: any) {
   const res = await fetch(`${apiBase}/sim/repair`, {
     method: 'POST',

@@ -1001,6 +1001,12 @@ body {
   padding: 0.3rem 0.4rem;
 }
 
+.fault-row-state {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  text-align: right;
+}
+
 .empty-compact {
   color: var(--text-muted);
   font-size: 0.75rem;

@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://outage:outage@localhost:5432/outage"
     redis_url: str = "redis://localhost:6379/0"
     telemetry_stream: str = "telemetry.inbound"
-    detect_wait_sec: int = 30
+    detect_wait_sec: int = 3
     cors_origins: str = "http://localhost:5173,http://localhost:3000"
     openai_api_key: str = ""
     groq_api_key: str = ""

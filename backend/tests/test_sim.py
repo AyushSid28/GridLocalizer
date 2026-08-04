@@ -21,7 +21,7 @@ from app.models import (
 )
 from app.services.topo_index import refresh_topology
 from app.services.localization import run_global_localization
-from app.api.sim import inject_fault, repair_fault, inject_noise, run_scenario, FaultInjectionIn, NoiseInjectionIn, ScenarioFault, ScenarioIn
+from app.api.sim import clear_noise, inject_fault, repair_fault, inject_noise, run_scenario, ClearNoiseIn, FaultInjectionIn, NoiseInjectionIn, ScenarioFault, ScenarioIn
 from app.worker import process_event
 
 engine = create_engine("sqlite:///:memory:")
@@ -146,6 +146,24 @@ def test_noise_injection(test_db):
     state = test_db.get(PoleState, "P-01")
     assert state.energized is True
     assert r_mock.xadd.call_count == 1
+    payload = json.loads(r_mock.xadd.call_args.args[1]["payload"])
+    assert payload["event"] == "heartbeat"
+    assert payload["energized"] is True
+    assert process_event(test_db, r_mock, payload) is True
+    assert run_global_localization(test_db) == []
+
+    r_mock.reset_mock()
+    res = clear_noise(
+        ClearNoiseIn(target_id="P-01"),
+        db=test_db,
+        r=r_mock,
+        settings=settings_mock,
+    )
+    assert res["noise_cleared"] is True
+    assert res["target_id"] == "P-01"
+    payload = json.loads(r_mock.xadd.call_args.args[1]["payload"])
+    assert payload["event"] == "heartbeat"
+    assert payload["energized"] is True
 
     r_mock.reset_mock()
     res = inject_noise(
@@ -246,9 +264,34 @@ def test_multi_dt_scenario_publishes_without_500(test_db):
                 device_id=f"DEV-{dt_id}",
                 energized=True,
                 last_seq=0,
+                firmware="1.2.0" if dt_id == "D-0003" else "1.4.2",
                 last_seen_at=datetime.now(timezone.utc),
             )
         )
+        if dt_id == "D-0003":
+            test_db.add(
+                Pole(
+                    id="P-D-0003-CHILD",
+                    lat=12.9002,
+                    lon=77.5002,
+                    feeder_id="F-TEST",
+                    dt_id=dt_id,
+                    parent_id=pole_id,
+                    true_parent_id=pole_id,
+                    device_id="DEV-D-0003-CHILD",
+                    topology_source=TopologySource.recorded,
+                )
+            )
+            test_db.add(
+                PoleState(
+                    pole_id="P-D-0003-CHILD",
+                    device_id="DEV-D-0003-CHILD",
+                    energized=True,
+                    last_seq=0,
+                    firmware="1.4.2",
+                    last_seen_at=datetime.now(timezone.utc),
+                )
+            )
     test_db.commit()
     refresh_topology(test_db)
 
@@ -270,9 +313,9 @@ def test_multi_dt_scenario_publishes_without_500(test_db):
     )
 
     assert res["status"] == "injected"
-    assert res["affected_devices"] == 3
+    assert res["affected_devices"] == 4
     assert set(res["dts"]) == {"D-0003", "D-0006", "D-0008"}
-    assert r_mock.xadd.call_count == 3
+    assert r_mock.xadd.call_count == 4
 
     for call in r_mock.xadd.call_args_list:
         assert process_event(test_db, r_mock, json.loads(call.args[1]["payload"])) is True
