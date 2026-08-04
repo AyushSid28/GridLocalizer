@@ -1,3 +1,4 @@
+import threading
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -17,6 +18,13 @@ async def lifespan(_app: FastAPI):
     with SessionLocal() as db:
         ensure_seed(db)
         refresh_topology(db)
+
+    # Start telemetry consumer worker in a background daemon thread
+    # so it runs inside the same free Render web service process
+    from app.worker import main as worker_main
+    t = threading.Thread(target=worker_main, daemon=True, name="telemetry-worker")
+    t.start()
+
     yield
 
 
