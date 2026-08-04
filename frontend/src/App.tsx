@@ -105,18 +105,25 @@ function isActiveIncident(incident: Incident) {
   return activeStatuses.includes(incident.status);
 }
 
-/** Map color follows telemetry, not ticket status (ticket can stay open after restore). */
-function dtIsDarkOnMap(dt: DT, allIncidents: Incident[]): boolean {
-  if ((dt.dark_poles ?? 0) > 0) return true;
-  // Feeder-level ticket: also red while any DT on that feeder still reports dark poles
-  // (dark_poles already covered). No ticket-only red after poles are live again.
-  void allIncidents;
-  return false;
+function isDtSourceOutage(dtId: string, feederId: string | null, allIncidents: Incident[]): boolean {
+  return allIncidents.some(
+    (incident) =>
+      isActiveIncident(incident) &&
+      (
+        (incident.kind === "dt" && incident.dt_id === dtId) ||
+        (incident.kind === "feeder" && feederId !== null && incident.feeder_id === feederId)
+      )
+  );
 }
 
-function selectedDtHasDarkPoles(detail: DTDetail | null): boolean {
-  if (!detail) return false;
-  return detail.poles.some((p) => p.energized === false);
+function hasChildFaultTicket(dtId: string, allIncidents: Incident[]): boolean {
+  return allIncidents.some(
+    (incident) =>
+      isActiveIncident(incident) &&
+      incident.dt_id === dtId &&
+      incident.kind !== "dt" &&
+      incident.kind !== "feeder"
+  );
 }
 
 function getStatusLabel(status: Incident["status"]) {
@@ -197,6 +204,8 @@ export default function App() {
   const [selectedDT, setSelectedDT] = useState<DTDetail | null>(null);
   const [selectedDTId, setSelectedDTId] = useState<string | null>(null);
   const [focusedPole, setFocusedPole] = useState<PoleDetail | null>(null);
+  const [incidentSummary, setIncidentSummary] = useState<{ text: string; source: string } | null>(null);
+  const [summaryLoading, setSummaryLoading] = useState(false);
 
   // Filter/Sort states
   const [incidentFilter, setIncidentFilter] = useState<"all" | "active" | "closed">("active");
@@ -308,6 +317,25 @@ export default function App() {
     }
   }
 
+  async function summarizeIncident(id: string) {
+    setSummaryLoading(true);
+    setIncidentSummary(null);
+    setActionError(null);
+    try {
+      const res = await fetch(`${apiBase}/incidents/${id}/explain`, { method: "POST" });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(getApiErrorMessage(errData, `HTTP error ${res.status}`));
+      }
+      const data = await res.json();
+      setIncidentSummary({ text: data.explanation, source: data.source });
+    } catch (err: any) {
+      setActionError(err.message);
+    } finally {
+      setSummaryLoading(false);
+    }
+  }
+
   // Simulation Controls
   async function triggerSimulation(action: "inject" | "repair") {
     setSimResponse(null);
@@ -347,7 +375,7 @@ export default function App() {
           span_to: simSpanTo || undefined,
         });
       }
-      setSimResponse(`Success: ${action === "inject" ? "Outage injected" : "Outage repaired"} (${data.affected_devices} devices affected)`);
+      setSimResponse(`Success: ${action === "inject" ? "Outage injected" : "Outage repaired"} (${data.affected_devices} telemetry devices signaled)`);
       // Nudge pollers so map colors catch up after worker processes telemetry
       window.setTimeout(() => setRefreshTick((n) => n + 1), 800);
       window.setTimeout(() => setRefreshTick((n) => n + 1), 2500);
@@ -502,6 +530,7 @@ export default function App() {
                     onClick={() => {
                       setSelectedIncident(inc);
                       setFocusedPole(null);
+                      setIncidentSummary(null);
                     }}
                   >
                     <div className="card-top">
@@ -517,7 +546,7 @@ export default function App() {
                         <span className="value">{(inc.confidence * 100).toFixed(0)}%</span>
                       </div>
                       <div>
-                        <span className="label">Affected Poles</span>
+                        <span className="label">Total Fault Scope</span>
                         <span className="value">{inc.affected_poles} poles</span>
                       </div>
                       <div>
@@ -586,10 +615,8 @@ export default function App() {
               {/* RENDER VIEW 1: Global Grid (All Transformers) */}
               {!selectedDTId && dts.map(dt => {
                 const { x, y } = getCoordinates(dt.lat, dt.lon);
-                const isDark = dtIsDarkOnMap(dt, incidents);
-                const hasOpenTicket = incidents.some(
-                  (i) => isActiveIncident(i) && (i.dt_id === dt.dt_id || (i.kind === "feeder" && i.feeder_id === dt.feeder_id))
-                );
+                const isSourceOutage = isDtSourceOutage(dt.dt_id, dt.feeder_id, incidents);
+                const hasChildFault = hasChildFaultTicket(dt.dt_id, incidents);
 
                 return (
                   <g
@@ -607,7 +634,7 @@ export default function App() {
                       width="24"
                       height="24"
                       rx="3"
-                      className={`transformer-rect ${isDark ? "dark" : "live"}${hasOpenTicket && !isDark ? " ticket-open" : ""}`}
+                      className={`transformer-rect ${isSourceOutage ? "dark" : "live"}${hasChildFault && !isSourceOutage ? " ticket-open" : ""}`}
                     />
                     <text y="24" className="node-label" textAnchor="middle">
                       {dt.dt_id}
@@ -658,14 +685,12 @@ export default function App() {
                     {/* Root Node (Transformer itself) */}
                     {showTransformersLayer && (() => {
                       const coord = getCoordinates(selectedDT.lat, selectedDT.lon);
-                      const polesDark = selectedDtHasDarkPoles(selectedDT);
-                      const openDtTicket = incidents.some(
-                        (i) => i.dt_id === selectedDT.dt_id && i.kind === "dt" && isActiveIncident(i)
-                      );
+                      const isSourceOutage = isDtSourceOutage(selectedDT.dt_id, selectedDT.feeder_id, incidents);
+                      const hasChildFault = hasChildFaultTicket(selectedDT.dt_id, incidents);
                       return (
                         <g
                           key={`root-${selectedDT.dt_id}`}
-                          className={`map-node transformer-node${polesDark ? " faulted" : ""}`}
+                          className={`map-node transformer-node${isSourceOutage ? " faulted" : ""}`}
                           transform={`translate(${coord.x}, ${coord.y})`}
                         >
                           <rect
@@ -674,7 +699,7 @@ export default function App() {
                             width="28"
                             height="28"
                             rx="4"
-                            className={`transformer-rect ${polesDark ? "dark" : "live"}${openDtTicket && !polesDark ? " ticket-open" : ""}`}
+                            className={`transformer-rect ${isSourceOutage ? "dark" : "live"}${hasChildFault && !isSourceOutage ? " ticket-open" : ""}`}
                             stroke="#fff"
                             strokeWidth="1.5"
                           />
@@ -761,7 +786,7 @@ export default function App() {
                     <span className="value font-bold">{(selectedIncident.confidence * 100).toFixed(0)}%</span>
                   </div>
                   <div className="info-row">
-                    <span className="label">Affected Poles</span>
+                    <span className="label">Total Fault Scope</span>
                     <span className="value">{selectedIncident.affected_poles}</span>
                   </div>
                   <div className="info-row">
@@ -834,6 +859,27 @@ export default function App() {
                         ))}
                       </ul>
                     </div>
+                  )}
+                </div>
+
+                <div className="summary-section">
+                  <div className="summary-header">
+                    <h4>Operator Summary</h4>
+                    <button
+                      className="btn btn-secondary summary-button"
+                      disabled={summaryLoading}
+                      onClick={() => summarizeIncident(selectedIncident.id)}
+                    >
+                      {summaryLoading ? "Summarizing..." : "Summarize Evidence"}
+                    </button>
+                  </div>
+                  {incidentSummary ? (
+                    <>
+                      <p>{incidentSummary.text}</p>
+                      <span className="summary-source">Source: {incidentSummary.source}</span>
+                    </>
+                  ) : (
+                    <p className="summary-empty">Uses only the deterministic evidence shown above.</p>
                   )}
                 </div>
 

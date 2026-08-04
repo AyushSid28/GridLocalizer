@@ -78,12 +78,12 @@ const MultifaultSelector: React.FC<MultifaultSelectorProps> = ({ dts, feeders, o
     try {
       const data = await api.createScenario(faults);
       const affected = data?.affected_devices ?? 0;
-      setMessage(`✅ Injected: ${affected} devices affected. Click "Restore All" to undo.`);
+      setMessage(`Injected: ${affected} telemetry devices signaled. Click "Restore All" to undo.`);
       setLastInjected(faults);  // save for restore
       setFaults([]);
       onResult(affected.toString());
     } catch (e: any) {
-      setMessage(`❌ Error: ${e.message}`);
+      setMessage(`Error: ${e.message}`);
       onResult(null);
     } finally {
       setIsInjecting(false);
@@ -109,11 +109,11 @@ const MultifaultSelector: React.FC<MultifaultSelectorProps> = ({ dts, feeders, o
           })
         )
       );
-      setMessage(`✅ Restored ${lastInjected.length} fault(s) successfully.`);
+      setMessage(`Restored ${lastInjected.length} fault(s) successfully.`);
       setLastInjected([]);
       onResult(null);
     } catch (e: any) {
-      setMessage(`❌ Restore error: ${e.message}`);
+      setMessage(`Restore error: ${e.message}`);
     } finally {
       setIsRestoring(false);
     }
@@ -123,7 +123,7 @@ const MultifaultSelector: React.FC<MultifaultSelectorProps> = ({ dts, feeders, o
     <div className="multifault-selector">
       <h4>Multifault Selector</h4>
 
-      <div className="draft">
+      <div className="multi-draft">
         <select value={type} onChange={e => setType(e.target.value as FaultKind)}>
           <option value="dt">DT Fault</option>
           <option value="span">Span Fault</option>
@@ -138,19 +138,20 @@ const MultifaultSelector: React.FC<MultifaultSelectorProps> = ({ dts, feeders, o
           />
         )}
         {type === 'span' && (
-          <>
+          <div className="multi-span-inputs">
             <input placeholder="From Pole ID" value={spanFrom} onChange={e => setSpanFrom(e.target.value)} />
             <input placeholder="To Pole ID" value={spanTo} onChange={e => setSpanTo(e.target.value)} />
-          </>
+          </div>
         )}
-        <button onClick={addFault}>Add Fault</button>
+        <button className="btn btn-secondary" onClick={addFault}>Add Fault</button>
       </div>
 
-      <ul className="selected-list">
+      <ul className="selected-fault-list">
+        {faults.length === 0 && <li className="empty-compact">No scenario faults added</li>}
         {faults.map(f => (
-          <li key={f.id}>
-            <span>{f.kind.toUpperCase()} — {f.kind === 'span' ? `${f.span_from} → ${f.span_to}` : f.target_id}</span>
-            <button onClick={() => removeFault(f.id)}>✕</button>
+          <li key={f.id} className="selected-fault-row">
+            <span>{f.kind.toUpperCase()} - {f.kind === 'span' ? `${f.span_from} to ${f.span_to}` : f.target_id}</span>
+            <button className="btn btn-cancel" onClick={() => removeFault(f.id)}>Remove</button>
           </li>
         ))}
       </ul>
@@ -159,20 +160,20 @@ const MultifaultSelector: React.FC<MultifaultSelectorProps> = ({ dts, feeders, o
 
       <div className="multifault-actions">
         <button
-          className="btn btn-sim"
+          className="btn btn-danger"
           onClick={injectFaults}
           disabled={isInjecting || isRestoring || faults.length === 0}
         >
-          {isInjecting ? 'Injecting…' : '⚡ Inject Faults'}
+          {isInjecting ? 'Injecting...' : 'Inject Faults'}
         </button>
 
         <button
-          className="btn btn-sim"
+          className="btn btn-success"
           onClick={restoreAll}
           disabled={isRestoring || isInjecting || lastInjected.length === 0}
           title={lastInjected.length === 0 ? 'Inject faults first to enable restore' : `Restore ${lastInjected.length} fault(s)`}
         >
-          {isRestoring ? 'Restoring…' : `✅ Restore All${lastInjected.length > 0 ? ` (${lastInjected.length})` : ''}`}
+          {isRestoring ? 'Restoring...' : `Restore All${lastInjected.length > 0 ? ` (${lastInjected.length})` : ''}`}
         </button>
       </div>
     </div>

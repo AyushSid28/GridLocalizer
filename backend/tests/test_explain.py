@@ -3,6 +3,8 @@ from unittest.mock import AsyncMock, patch
 from datetime import datetime, timezone
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.ext.compiler import compiles
+from sqlalchemy.dialects.postgresql import JSONB
 
 from app.db import Base
 from app.models import (
@@ -19,6 +21,11 @@ from app.settings import get_settings
 
 engine = create_engine("sqlite:///:memory:")
 TestingSessionLocal = sessionmaker(bind=engine)
+
+
+@compiles(JSONB, "sqlite")
+def compile_jsonb_sqlite(type_, compiler, **kw):
+    return "TEXT"
 
 
 @pytest.fixture
@@ -58,6 +65,7 @@ def test_db():
 async def test_explain_fallback(test_db):
     # Retrieve explanation with no API key
     with patch("app.api.incidents.get_settings") as mock_settings:
+        mock_settings.return_value.groq_api_key = ""
         mock_settings.return_value.openai_api_key = ""
         res = await explain_incident("INC-EX", db=test_db)
         
@@ -86,10 +94,11 @@ async def test_explain_llm_success(test_db):
          patch("httpx.AsyncClient.post", new_callable=AsyncMock, return_value=mock_response):
 
         
-        mock_settings.return_value.openai_api_key = "fake-key"
+        mock_settings.return_value.groq_api_key = "fake-groq-key"
+        mock_settings.return_value.openai_api_key = ""
         
         res = await explain_incident("INC-EX", db=test_db)
         
         assert res["id"] == "INC-EX"
-        assert res["source"] == "llm"
+        assert res["source"] == "groq-llm"
         assert res["explanation"] == "This is a mocked LLM explanation of the transformer outage."

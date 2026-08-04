@@ -259,7 +259,7 @@ def run_localization_for_dt(db: Session, dt_id: str) -> list[Incident]:
             confidence=confidence,
             evidence=evidence,
             reasons=[
-                f"All {len(active_reporting_poles)} reporting poles under DT {dt_id} are dark.",
+                f"All {len(active_reporting_poles)} trusted reporting poles under DT {dt_id} are dark.",
                 f"Wiring topology is {'recorded' if tree.wiring_known else 'geo-inferred'}."
             ],
             topology_mode="recorded" if tree.wiring_known else "inferred",
@@ -321,7 +321,7 @@ def run_localization_for_dt(db: Session, dt_id: str) -> list[Incident]:
         )
         reasons = [
             f"Frontier detected at span {parent or 'DT'} -> {child}.",
-            f"{len(dark_affected)} downstream poles are dark.",
+            f"{len(dark_affected)} trusted downstream reporting poles are dark.",
             f"Topology source: {'recorded' if tree.wiring_known else 'inferred'}."
         ]
         if not tree.wiring_known:
