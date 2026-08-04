@@ -230,6 +230,7 @@ export default function App() {
   const [showPolesLayer, setShowPolesLayer] = useState(true);
   const [showTransformersLayer, setShowTransformersLayer] = useState(true);
   const [showFaultBoundaries, setShowFaultBoundaries] = useState(true);
+  const [mapZoom, setMapZoom] = useState(1);
   const [refreshTick, setRefreshTick] = useState(0);
 
   // Poll DB state
@@ -448,6 +449,11 @@ export default function App() {
   // Unique Feeders list for Simulation selection
   const uniqueFeeders = Array.from(new Set(dts.map(d => d.feeder_id)));
   const selectedLifecycle = selectedIncident ? getLifecycleStage(selectedIncident.status) : null;
+  const clampMapZoom = (value: number) => Math.min(3, Math.max(1, Number(value.toFixed(2))));
+  const zoomMapBy = (delta: number) => setMapZoom((current) => clampMapZoom(current + delta));
+  const viewBoxWidth = 600 / mapZoom;
+  const viewBoxHeight = 450 / mapZoom;
+  const mapViewBox = `${300 - viewBoxWidth / 2} ${225 - viewBoxHeight / 2} ${viewBoxWidth} ${viewBoxHeight}`;
 
   return (
     <div className="app-shell">
@@ -567,6 +573,13 @@ export default function App() {
             <div className="map-header-top">
               <h2>Grid Topology Map</h2>
               <div className="layer-controls">
+                <div className="zoom-control">
+                  <span>Zoom</span>
+                  <button className="btn-back zoom-button" onClick={() => zoomMapBy(-0.25)} disabled={mapZoom <= 1} aria-label="Zoom out">-</button>
+                  <span className="zoom-value">{mapZoom.toFixed(1)}x</span>
+                  <button className="btn-back zoom-button" onClick={() => zoomMapBy(0.25)} disabled={mapZoom >= 3} aria-label="Zoom in">+</button>
+                  <button className="btn-back zoom-reset" onClick={() => setMapZoom(1)}>Reset</button>
+                </div>
                 <label>
                   <input type="checkbox" checked={showTransformersLayer} onChange={e => setShowTransformersLayer(e.target.checked)} />
                   Transformers
@@ -593,8 +606,14 @@ export default function App() {
             )}
           </div>
 
-          <div className="map-canvas-container">
-            <svg viewBox="0 0 600 450" className="topology-svg">
+          <div
+            className="map-canvas-container"
+            onWheel={(event) => {
+              event.preventDefault();
+              zoomMapBy(event.deltaY > 0 ? -0.15 : 0.15);
+            }}
+          >
+            <svg viewBox={mapViewBox} className="topology-svg">
               {/* Grid Background Lines */}
               <defs>
                 <pattern id="gridPattern" width="40" height="40" patternUnits="userSpaceOnUse">
