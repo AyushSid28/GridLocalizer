@@ -27,11 +27,14 @@ services:
 
   api:
     build: ./backend
-    env_file: .env
     environment:
       DATABASE_URL: postgresql+psycopg://outage:outage@postgres:5432/outage
       REDIS_URL: redis://redis:6379/0
       CORS_ORIGINS: http://localhost:3000,http://localhost:5173,http://web
+      TELEMETRY_STREAM: telemetry.inbound
+      DETECT_WAIT_SEC: "3"
+      GROQ_API_KEY: ""
+      OPENAI_API_KEY: ""
     ports:
       - "8000:8000"
     depends_on:
@@ -48,10 +51,11 @@ services:
   worker:
     build: ./backend
     command: ["python", "-m", "app.worker"]
-    env_file: .env
     environment:
       DATABASE_URL: postgresql+psycopg://outage:outage@postgres:5432/outage
       REDIS_URL: redis://redis:6379/0
+      TELEMETRY_STREAM: telemetry.inbound
+      DETECT_WAIT_SEC: "3"
     depends_on:
       postgres:
         condition: service_healthy
@@ -68,3 +72,4 @@ services:
 
 volumes:
   pgdata:
+
