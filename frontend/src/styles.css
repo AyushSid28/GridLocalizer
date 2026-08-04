@@ -878,8 +878,8 @@ body {
 
 .simulator-grid {
   display: grid;
-  grid-template-columns: 1.4fr 1fr 1.6fr;
-  gap: 1.5rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1rem;
 }
 
 .sim-group {
@@ -900,8 +900,13 @@ body {
   align-items: center;
 }
 
-.sim-controls .btn,
-.multifault-actions .btn {
+.sim-actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.sim-actions .btn {
   flex: 0 0 132px;
   width: 132px;
   min-height: 43px;
@@ -916,6 +921,8 @@ body {
   font-size: 0.8rem;
   outline: none;
   cursor: pointer;
+  min-width: 0;
+  flex: 1 1 0;
 }
 
 .span-inputs {
@@ -931,11 +938,19 @@ body {
   min-width: 0;
 }
 
+.multifault-selector {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
 .multi-draft {
   display: grid;
-  grid-template-columns: 130px 1fr 110px;
+  grid-template-columns: minmax(120px, 0.9fr) minmax(120px, 1fr) 110px;
   gap: 0.5rem;
   align-items: center;
+  min-width: 0;
 }
 
 .multi-draft .btn {
@@ -990,15 +1005,4 @@ body {
   color: var(--text-muted);
   font-size: 0.75rem;
   padding: 0.25rem;
-}
-
-.multifault-actions {
-  display: flex;
-  gap: 0.5rem;
-  align-items: center;
-}
-
-.multifault-actions .btn {
-  flex: 0 0 132px;
-  width: 132px;
 }

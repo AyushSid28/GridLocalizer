@@ -993,7 +993,8 @@ export default function App() {
                   <input type="text" placeholder="To Pole ID" value={simSpanTo} onChange={e => setSimSpanTo(e.target.value)} />
                 </div>
               )}
-
+            </div>
+            <div className="sim-actions">
               <button className="btn btn-danger" onClick={() => triggerSimulation("inject")}>
                 Inject Outage
               </button>
@@ -1013,6 +1014,8 @@ export default function App() {
                 <option value="reorder">Out-of-Order Telemetry</option>
               </select>
               <input type="text" placeholder="Target Pole ID" value={simNoiseTarget} onChange={e => setSimNoiseTarget(e.target.value)} />
+            </div>
+            <div className="sim-actions">
               <button className="btn btn-secondary" onClick={triggerNoise}>
                 Inject Noise
               </button>

@@ -146,19 +146,7 @@ const MultifaultSelector: React.FC<MultifaultSelectorProps> = ({ dts, feeders, o
         <button className="btn btn-secondary" onClick={addFault}>Add Fault</button>
       </div>
 
-      <ul className="selected-fault-list">
-        {faults.length === 0 && <li className="empty-compact">No scenario faults added</li>}
-        {faults.map(f => (
-          <li key={f.id} className="selected-fault-row">
-            <span>{f.kind.toUpperCase()} - {f.kind === 'span' ? `${f.span_from} to ${f.span_to}` : f.target_id}</span>
-            <button className="btn btn-cancel" onClick={() => removeFault(f.id)}>Remove</button>
-          </li>
-        ))}
-      </ul>
-
-      {message && <div className="msg">{message}</div>}
-
-      <div className="multifault-actions">
+      <div className="sim-actions multifault-actions">
         <button
           className="btn btn-danger"
           onClick={injectFaults}
@@ -176,6 +164,18 @@ const MultifaultSelector: React.FC<MultifaultSelectorProps> = ({ dts, feeders, o
           {isRestoring ? 'Restoring...' : `Restore All${lastInjected.length > 0 ? ` (${lastInjected.length})` : ''}`}
         </button>
       </div>
+
+      <ul className="selected-fault-list">
+        {faults.length === 0 && <li className="empty-compact">No scenario faults added</li>}
+        {faults.map(f => (
+          <li key={f.id} className="selected-fault-row">
+            <span>{f.kind.toUpperCase()} - {f.kind === 'span' ? `${f.span_from} to ${f.span_to}` : f.target_id}</span>
+            <button className="btn btn-cancel" onClick={() => removeFault(f.id)}>Remove</button>
+          </li>
+        ))}
+      </ul>
+
+      {message && <div className="msg">{message}</div>}
     </div>
   );
 };
