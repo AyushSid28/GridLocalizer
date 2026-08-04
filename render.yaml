@@ -1,0 +1,39 @@
+services:
+  # FastAPI Web Service
+  - type: web
+    name: gridlocalizer-backend
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    plan: free
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: TELEMETRY_STREAM
+        value: telemetry.inbound
+      - key: DETECT_WAIT_SEC
+        value: "30"
+      - key: GROQ_API_KEY
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
+
+  # Background Worker (telemetry consumer)
+  - type: worker
+    name: gridlocalizer-worker
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    plan: free
+    dockerCommand: python -m app.worker
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: TELEMETRY_STREAM
+        value: telemetry.inbound
+      - key: DETECT_WAIT_SEC
+        value: "30"
