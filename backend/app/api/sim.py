@@ -174,6 +174,8 @@ def repair_fault(
     affected_count = 0
 
     now = datetime.now(timezone.utc)
+    
+    dt_ids = {p.dt_id for p in poles}
 
     for p in poles:
         if not p.device_id:
@@ -181,35 +183,50 @@ def repair_fault(
 
         state = db.get(PoleState, p.id)
         fw = state.firmware if state else "1.4.2"
+        
+        b_seq = next_seq(state)
+        r_seq = next_seq(state, 2)
 
         publish_event(
-            r,
-            settings.telemetry_stream,
-            p,
-            "boot",
-            True,
-            next_seq(state),
-            now,
-            fw,
-            3750,
-            -72,
+            r, settings.telemetry_stream, p, "boot", True, b_seq, now, fw, 3750, -72
         )
         publish_event(
-            r,
-            settings.telemetry_stream,
-            p,
-            "power_restored",
-            True,
-            next_seq(state, 2),
-            now + timedelta(milliseconds=100),
-            fw,
-            3800,
-            -70,
+            r, settings.telemetry_stream, p, "power_restored", True, r_seq, now + timedelta(milliseconds=100), fw, 3800, -70
         )
+        
+        # Synchronously update DB for instant demo response
+        if state:
+            state.energized = True
+            state.last_event = "power_restored"
+            state.last_seq = r_seq
+            state.last_boot_seq = b_seq
+            state.last_power_restored_seq = r_seq
+            state.last_boot_at = now
+            state.last_power_restored_at = now + timedelta(milliseconds=100)
+            state.last_seen_at = now + timedelta(milliseconds=100)
+
         affected_count += 1
 
+    # Auto-close related active incidents immediately for fast demo
+    from app.models import Incident, TicketStatus
+    from sqlalchemy import select
+    
+    if data.kind == "dt" and data.target_id:
+        stmt = select(Incident).where(Incident.dt_id == data.target_id, Incident.status != TicketStatus.closed)
+        for inc in db.scalars(stmt).all():
+            inc.status = TicketStatus.closed
+            inc.closed_at = now
+            inc.verify_note = "Auto-closed via synchronous repair API"
+    elif data.kind == "feeder" and data.target_id:
+        stmt = select(Incident).where(Incident.feeder_id == data.target_id, Incident.status != TicketStatus.closed)
+        for inc in db.scalars(stmt).all():
+            inc.status = TicketStatus.closed
+            inc.closed_at = now
+            inc.verify_note = "Auto-closed via synchronous repair API"
+
+    db.commit()
+
     # Trigger dirty flag
-    dt_ids = {p.dt_id for p in poles}
     for dt_id in dt_ids:
         r.set(f"dt_dirty:{dt_id}", time.time())
 
