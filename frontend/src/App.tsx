@@ -488,6 +488,11 @@ export default function App() {
       setFocusedPole(null);
       return;
     }
+    if (inc.kind === "span" && inc.dt_id) {
+      setSelectedDTId(inc.dt_id);
+      setFocusedPole(null);
+      return;
+    }
     if (inc.kind === "feeder" && inc.feeder_id) {
       const match = dts.find((d) => d.feeder_id === inc.feeder_id);
       if (match) {
@@ -636,7 +641,7 @@ export default function App() {
                         <span className="badge badge-inferred">Inferred</span>
                       )}
                       <span className="time-badge">{inc.pincode || "Location pending"}</span>
-                      {(inc.dt_id || inc.kind === "feeder") && (
+                      {(inc.dt_id || inc.kind === "feeder" || inc.kind === "span") && (
                         <button
                           type="button"
                           className="btn btn-secondary btn-compact"
@@ -899,7 +904,9 @@ export default function App() {
                   <h3>INCIDENT: #{selectedIncident.id.slice(0, 8).toUpperCase()}</h3>
                   <span className={`status-badge large ${selectedIncident.status}`}>{getStatusLabel(selectedIncident.status)}</span>
                 </div>
-                {(selectedIncident.dt_id || selectedIncident.kind === "feeder") && (
+                {(selectedIncident.dt_id ||
+                  selectedIncident.kind === "feeder" ||
+                  selectedIncident.kind === "span") && (
                   <button
                     type="button"
                     className="btn btn-secondary"

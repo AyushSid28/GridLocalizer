@@ -269,6 +269,48 @@ def inject_fault(
     }
 
 
+def _auto_close_incidents_for_repair(
+    db: Session, data: FaultInjectionIn, now: datetime
+) -> None:
+    """Close open tickets that match the repaired outage scope (all fault kinds)."""
+    note = "Auto-closed via synchronous repair API"
+    stmt = None
+
+    if data.kind == "dt" and data.target_id:
+        stmt = select(Incident).where(
+            Incident.dt_id == data.target_id,
+            Incident.status != TicketStatus.closed,
+        )
+    elif data.kind == "feeder" and data.target_id:
+        stmt = select(Incident).where(
+            Incident.feeder_id == data.target_id,
+            Incident.status != TicketStatus.closed,
+        )
+    elif data.kind == "span" and data.span_to:
+        conditions = [
+            Incident.kind == FaultKind.span,
+            Incident.span_to == data.span_to,
+            Incident.status != TicketStatus.closed,
+        ]
+        if data.span_from:
+            conditions.append(Incident.span_from == data.span_from)
+        stmt = select(Incident).where(*conditions)
+    elif data.kind == "pole" and data.target_id:
+        stmt = select(Incident).where(
+            Incident.kind == FaultKind.span,
+            Incident.span_to == data.target_id,
+            Incident.status != TicketStatus.closed,
+        )
+
+    if stmt is None:
+        return
+
+    for inc in db.scalars(stmt).all():
+        inc.status = TicketStatus.closed
+        inc.closed_at = now
+        inc.verify_note = note
+
+
 @router.post("/repair", status_code=status.HTTP_202_ACCEPTED)
 def repair_fault(
     data: FaultInjectionIn,
@@ -345,29 +387,7 @@ def repair_fault(
         log.warning("Redis pipeline failed during repair (DB state still updated): %s", e)
 
     # Auto-close related active incidents immediately for fast demo
-    if data.kind == "dt" and data.target_id:
-        stmt = select(Incident).where(Incident.dt_id == data.target_id, Incident.status != TicketStatus.closed)
-        for inc in db.scalars(stmt).all():
-            inc.status = TicketStatus.closed
-            inc.closed_at = now
-            inc.verify_note = "Auto-closed via synchronous repair API"
-    elif data.kind == "feeder" and data.target_id:
-        stmt = select(Incident).where(Incident.feeder_id == data.target_id, Incident.status != TicketStatus.closed)
-        for inc in db.scalars(stmt).all():
-            inc.status = TicketStatus.closed
-            inc.closed_at = now
-            inc.verify_note = "Auto-closed via synchronous repair API"
-    elif data.kind == "span" and data.span_from and data.span_to:
-        stmt = select(Incident).where(
-            Incident.kind == FaultKind.span,
-            Incident.span_from == data.span_from,
-            Incident.span_to == data.span_to,
-            Incident.status != TicketStatus.closed,
-        )
-        for inc in db.scalars(stmt).all():
-            inc.status = TicketStatus.closed
-            inc.closed_at = now
-            inc.verify_note = "Auto-closed via synchronous repair API"
+    _auto_close_incidents_for_repair(db, data, now)
 
     try:
         db.commit()

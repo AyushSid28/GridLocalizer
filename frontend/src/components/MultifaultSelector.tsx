@@ -112,8 +112,17 @@ const MultifaultSelector: React.FC<MultifaultSelectorProps> = ({ dts, feeders, i
         acc.push({ id: incident.id, kind: 'feeder', target_id: incident.feeder_id });
         return acc;
       }
-      if (incident.kind === 'span' && incident.span_from && incident.span_to) {
-        acc.push({ id: incident.id, kind: 'span', span_from: incident.span_from, span_to: incident.span_to });
+      if (incident.kind === 'span' && incident.span_to) {
+        acc.push({
+          id: incident.id,
+          kind: 'span',
+          span_from: incident.span_from ?? undefined,
+          span_to: incident.span_to,
+        });
+        return acc;
+      }
+      if (incident.kind === 'sensor' && incident.span_to) {
+        acc.push({ id: incident.id, kind: 'pole', target_id: incident.span_to });
         return acc;
       }
       return acc;

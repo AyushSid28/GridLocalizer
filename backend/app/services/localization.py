@@ -497,7 +497,12 @@ def run_global_localization(db: Session) -> list[Incident]:
                 select(Incident.id).where(
                     Incident.feeder_id == feeder_id,
                     Incident.kind == FaultKind.feeder,
-                    Incident.status.in_([TicketStatus.acknowledged, TicketStatus.crew_assigned, TicketStatus.resolved])
+                    Incident.status.in_([
+                        TicketStatus.detected,
+                        TicketStatus.acknowledged,
+                        TicketStatus.crew_assigned,
+                        TicketStatus.resolved,
+                    ]),
                 ).limit(1)
             )
             if not active_exists:
