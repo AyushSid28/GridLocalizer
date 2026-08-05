@@ -1,12 +1,10 @@
 # GridLocalizer — main system flow (Mermaid source)
 
-Editable source for the diagram in the [README](../README.md) and [ARCHITECTURE.md](ARCHITECTURE.md). PNG: `images/system-flow.png`.
+Editable source for the diagram in the [README](../README.md) and [ARCHITECTURE.md](ARCHITECTURE.md).
 
-## Export a new PNG (optional)
+**Mermaid Chart (edit online):** https://mermaid.ai/app/projects/c8a88bf0-6185-46de-8264-3d9d3631bdc5/diagrams/24a90605-4b73-4d7b-b8c4-d24d10c8e364/version/v0.1/edit
 
-1. Open [Mermaid Live Editor](https://mermaid.live).
-2. Copy the fenced `flowchart TB` block below.
-3. Export PNG → save as `images/system-flow.png`.
+Optional PNG for slides: export from Mermaid Chart at 2x scale → `images/system-flow.png`.
 
 ---
 
