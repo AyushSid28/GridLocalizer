@@ -1,26 +1,47 @@
 {
-  "version": 2,
-  "builds": [
+  "installCommand": "cd frontend && npm install",
+  "buildCommand": "cd frontend && npm run build",
+  "outputDirectory": "frontend/dist",
+  "rewrites": [
     {
-      "src": "frontend/package.json",
-      "use": "@vercel/static-build",
-      "config": {
-        "distDir": "dist"
-      }
+      "source": "/health",
+      "destination": "https://gridlocalizer-backend.onrender.com/health"
     },
     {
-      "src": "api/index.py",
-      "use": "@vercel/python"
-    }
-  ],
-  "routes": [
-    {
-      "src": "/api/(.*)",
-      "dest": "api/index.py"
+      "source": "/health/:path*",
+      "destination": "https://gridlocalizer-backend.onrender.com/health/:path*"
     },
     {
-      "src": "/(.*)",
-      "dest": "frontend/$1"
+      "source": "/network/:path*",
+      "destination": "https://gridlocalizer-backend.onrender.com/network/:path*"
+    },
+    {
+      "source": "/incidents/:path*",
+      "destination": "https://gridlocalizer-backend.onrender.com/incidents/:path*"
+    },
+    {
+      "source": "/sim/:path*",
+      "destination": "https://gridlocalizer-backend.onrender.com/sim/:path*"
+    },
+    {
+      "source": "/telemetry",
+      "destination": "https://gridlocalizer-backend.onrender.com/telemetry"
+    },
+    {
+      "source": "/breadcrumb/:path*",
+      "destination": "https://gridlocalizer-backend.onrender.com/breadcrumb/:path*"
+    },
+    {
+      "source": "/docs",
+      "destination": "https://gridlocalizer-backend.onrender.com/docs"
+    },
+    {
+      "source": "/openapi.json",
+      "destination": "https://gridlocalizer-backend.onrender.com/openapi.json"
+    },
+    {
+      "source": "/((?!assets/).*)",
+      "destination": "/index.html"
     }
   ]
 }

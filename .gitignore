@@ -22,3 +22,4 @@ DOCS/
 MAINDOCS/
 backend/package-lock.json
 schedule-state.txt
+.vercel

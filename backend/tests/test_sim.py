@@ -101,13 +101,10 @@ def test_fault_injection_and_repair(test_db):
     assert res["injected"] is True
     assert res["affected_devices"] == 1
 
-    # Simulator publishes telemetry only; worker owns DB state changes.
+    # Inject sync-updates DB so the map goes dark without waiting on the worker.
     state = test_db.get(PoleState, "P-01")
-    assert state.energized is True
-    assert state.last_event is None
-
-    # Verify stream message was published
-    assert r_mock.xadd.call_count == 1
+    assert state.energized is False
+    assert state.last_event == "power_lost"
 
     # Reset mock and repair
     r_mock.reset_mock()
@@ -120,10 +117,9 @@ def test_fault_injection_and_repair(test_db):
     assert res["repaired"] is True
     assert res["affected_devices"] == 1
 
-    # Repair emits boot + power_restored and still does not mutate DB directly.
     state = test_db.get(PoleState, "P-01")
     assert state.energized is True
-    assert state.last_event is None
+    assert state.last_event == "power_restored"
     assert r_mock.xadd.call_count == 2
 
 
@@ -315,8 +311,14 @@ def test_multi_dt_scenario_publishes_without_500(test_db):
     assert res["status"] == "injected"
     assert res["affected_devices"] == 4
     assert set(res["dts"]) == {"D-0003", "D-0006", "D-0008"}
-    assert r_mock.xadd.call_count == 4
 
+    # All device poles are dark in DB immediately (including fw 1.2 silence).
+    for pole_id in ("P-D-0003", "P-D-0003-CHILD", "P-D-0006", "P-D-0008"):
+        state = test_db.get(PoleState, pole_id)
+        assert state is not None
+        assert state.energized is False
+
+    # Telemetry publish is lossy (fw 1.2 + ~30% miss) — only process what arrived.
     for call in r_mock.xadd.call_args_list:
         assert process_event(test_db, r_mock, json.loads(call.args[1]["payload"])) is True
 

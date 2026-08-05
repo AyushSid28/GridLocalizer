@@ -1,5 +1,6 @@
 import json
 import logging
+import random
 import time
 from datetime import datetime, timezone, timedelta
 from typing import Literal
@@ -116,6 +117,65 @@ def publish_event(
     r.xadd(stream, {"payload": json.dumps(payload)})
 
 
+def mark_pole_dark(
+    db: Session,
+    r: redis.Redis,
+    stream: str,
+    pole: Pole,
+    now: datetime,
+    *,
+    publish: bool = True,
+) -> bool:
+    """
+    Apply physical outage to one pole.
+
+    Always updates PoleState when a device exists (so the map goes dark immediately).
+    Telemetry publish is best-effort / firmware-aware:
+    - fw 1.2.x never sends power_lost (silence)
+    - ~30% of other devices fail to send the dying message
+    """
+    if not pole.device_id:
+        return False
+
+    state = db.get(PoleState, pole.id)
+    if state is None:
+        state = PoleState(pole_id=pole.id, device_id=pole.device_id, firmware="1.4.2")
+        db.add(state)
+        db.flush()
+
+    fw = state.firmware or "1.4.2"
+    seq = next_seq(state)
+
+    state.energized = False
+    state.last_event = "power_lost"
+    state.last_seq = seq
+    state.last_seen_at = now
+    state.suspect_sensor = False
+
+    should_publish = publish
+    if fw.startswith("1.2"):
+        should_publish = False
+    elif random.random() >= 0.70:
+        # 30% capacitor / radio failure — no dying packet, but power is still gone
+        should_publish = False
+
+    if should_publish:
+        publish_event(
+            r,
+            stream,
+            pole,
+            "power_lost",
+            False,
+            seq,
+            now,
+            fw,
+            3400,
+            -85,
+        )
+
+    return True
+
+
 @router.post("/inject", status_code=status.HTTP_202_ACCEPTED)
 def inject_fault(
     data: FaultInjectionIn,
@@ -125,32 +185,14 @@ def inject_fault(
 ) -> dict:
     poles = get_affected_poles(db, data)
     affected_count = 0
-
     now = datetime.now(timezone.utc)
 
     for p in poles:
-        if not p.device_id:
-            continue
+        if mark_pole_dark(db, r, settings.telemetry_stream, p, now):
+            affected_count += 1
 
-        state = db.get(PoleState, p.id)
-        fw = state.firmware if state else "1.4.2"
+    db.commit()
 
-        publish_event(
-            r,
-            settings.telemetry_stream,
-            p,
-            "power_lost",
-            False,
-            next_seq(state),
-            now,
-            fw,
-            3400,
-            -85,
-        )
-
-        affected_count += 1
-
-    # Trigger dirty DT flag in Redis for each affected DT
     dt_ids = {p.dt_id for p in poles}
     for dt_id in dt_ids:
         r.set(f"dt_dirty:{dt_id}", time.time())
@@ -160,6 +202,8 @@ def inject_fault(
         "kind": data.kind,
         "target_id": data.target_id or f"{data.span_from}->{data.span_to}",
         "affected_devices": affected_count,
+        "poles_in_scope": len(poles),
+        "unmonitored_poles": len(poles) - affected_count,
     }
 
 
@@ -382,7 +426,6 @@ def run_scenario(
         total_affected = 0
         now = datetime.now(timezone.utc)
         all_dt_ids = set()
-        published_by_pole: dict[str, int] = {}
         payload_for_log = [fault.model_dump() for fault in data.faults]
         log.info("Scenario simulation requested: %s", payload_for_log)
 
@@ -400,28 +443,10 @@ def run_scenario(
 
             for p in poles:
                 all_dt_ids.add(p.dt_id)
-                if not p.device_id:
-                    continue
+                if mark_pole_dark(db, r, settings.telemetry_stream, p, now):
+                    total_affected += 1
 
-                state = db.get(PoleState, p.id)
-                fw = state.firmware if state else "1.4.2"
-                pole_offset = published_by_pole.get(p.id, 0) + 1
-                published_by_pole[p.id] = pole_offset
-
-                publish_event(
-                    r,
-                    settings.telemetry_stream,
-                    p,
-                    "power_lost",
-                    False,
-                    next_seq(state, pole_offset),
-                    now,
-                    fw,
-                    3400,
-                    -85,
-                )
-
-                total_affected += 1
+        db.commit()
 
         for dt_id in all_dt_ids:
             r.set(f"dt_dirty:{dt_id}", time.time())

@@ -10,7 +10,10 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
     telemetry_stream: str = "telemetry.inbound"
     detect_wait_sec: int = 3
-    cors_origins: str = "http://localhost:5173,http://localhost:3000"
+    cors_origins: str = (
+        "http://localhost:5173,http://localhost:3000,"
+        "https://gridlocalizer.vercel.app,https://www.gridlocalizer.vercel.app"
+    )
     openai_api_key: str = ""
     groq_api_key: str = ""
 

@@ -1,16 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import './styles.css';
 import { Breadcrumb } from './components/Breadcrumb';
 import MultifaultSelector from './components/MultifaultSelector';
 import * as api from './api';
+import { apiBase } from './api';
 
-// API URL settings
-const apiBase = import.meta.env.VITE_API_URL ?? "";
-
-type Health = {
-  status: string;
-  service: string;
-};
+type ConnectionState = 'connecting' | 'online' | 'offline';
 
 type Summary = {
   poles: number;
@@ -196,7 +191,9 @@ function getLifecycleStage(status: Incident["status"]) {
 
 
 export default function App() {
-  const [health, setHealth] = useState<Health | null>(null);
+  const [connection, setConnection] = useState<ConnectionState>('connecting');
+  const [connectionHint, setConnectionHint] = useState<string | null>(null);
+  const failCountRef = useRef(0);
   const [summary, setSummary] = useState<Summary | null>(null);
   const [dts, setDts] = useState<DT[]>([]);
   const [incidents, setIncidents] = useState<Incident[]>([]);
@@ -231,7 +228,9 @@ export default function App() {
   const [showTransformersLayer, setShowTransformersLayer] = useState(true);
   const [showFaultBoundaries, setShowFaultBoundaries] = useState(true);
   const [mapZoom, setMapZoom] = useState(1);
-  const [refreshTick, setRefreshTick] = useState(0);
+  const [panX, setPanX] = useState(0);
+  const [panY, setPanY] = useState(0);
+  const panRef = useRef({ isPanning: false, startX: 0, startY: 0, startPanX: 0, startPanY: 0 });  const [refreshTick, setRefreshTick] = useState(0);
 
   // Poll DB state
   useEffect(() => {
@@ -243,22 +242,42 @@ export default function App() {
           api.fetchDTs(),
           api.fetchIncidents(),
         ]);
-        setHealth(healthData);
+        void healthData;
         setSummary(summaryData);
         setDts(dtData);
         setIncidents(incData);
-        
+        failCountRef.current = 0;
+        setConnection('online');
+        setConnectionHint(null);
+
         setSelectedIncident((current) => {
           if (!current) return current;
           return incData.find((i: Incident) => i.id === current.id) ?? current;
         });
       } catch (err) {
         console.error("Error polling data", err);
+        failCountRef.current += 1;
+        const isAbort = err instanceof DOMException && err.name === 'AbortError';
+        if (failCountRef.current < 8) {
+          setConnection('connecting');
+          setConnectionHint(
+            isAbort || failCountRef.current <= 3
+              ? 'Waking Render backend (free tier can take 30–60s on first visit)…'
+              : `Still connecting (attempt ${failCountRef.current})…`
+          );
+        } else {
+          setConnection('offline');
+          setConnectionHint(
+            apiBase
+              ? `Cannot reach API at ${apiBase}. Check Render service and CORS_ORIGINS.`
+              : 'Cannot reach API. Redeploy Vercel with latest vercel.json proxy or set VITE_API_URL on Render.'
+          );
+        }
       }
     }
 
     fetchData();
-    const interval = setInterval(fetchData, 3000);
+    const interval = setInterval(fetchData, 5000);
     return () => clearInterval(interval);
   }, [refreshTick]);
 
@@ -449,11 +468,30 @@ export default function App() {
   // Unique Feeders list for Simulation selection
   const uniqueFeeders = Array.from(new Set(dts.map(d => d.feeder_id)));
   const selectedLifecycle = selectedIncident ? getLifecycleStage(selectedIncident.status) : null;
-  const clampMapZoom = (value: number) => Math.min(3, Math.max(1, Number(value.toFixed(2))));
+  const clampMapZoom = (value: number) => Math.min(3, Math.max(1, Number(value.toFixed(1))));
   const zoomMapBy = (delta: number) => setMapZoom((current) => clampMapZoom(current + delta));
   const viewBoxWidth = 600 / mapZoom;
   const viewBoxHeight = 450 / mapZoom;
-  const mapViewBox = `${300 - viewBoxWidth / 2} ${225 - viewBoxHeight / 2} ${viewBoxWidth} ${viewBoxHeight}`;
+  const viewBoxX = 300 - viewBoxWidth / 2 + panX;
+  const viewBoxY = 225 - viewBoxHeight / 2 + panY;
+  const mapViewBox = `${viewBoxX} ${viewBoxY} ${viewBoxWidth} ${viewBoxHeight}`;
+
+     // Auto-center the map on load based on DT positions
+   useEffect(() => {
+     if (dts.length === 0) return;
+     const coords = dts.map(dt => getCoordinates(dt.lat, dt.lon));
+     const xs = coords.map(c => c.x);
+     const ys = coords.map(c => c.y);
+     const minX = Math.min(...xs);
+     const maxX = Math.max(...xs);
+     const minY = Math.min(...ys);
+     const maxY = Math.max(...ys);
+     const centerX = (minX + maxX) / 2;
+     const centerY = (minY + maxY) / 2;
+     // Adjust pan offsets so that the overall center aligns with view center (300,225)
+     setPanX(300 - centerX);
+     setPanY(225 - centerY);
+   }, [dts]);
 
   return (
     <div className="app-shell">
@@ -471,7 +509,8 @@ export default function App() {
           <div className="metric">
             <span className="metric-label">System State</span>
             <span className="metric-value status-indicator">
-              <span className={`dot ${health ? "dot-green" : "dot-red"}`}></span> {health ? "Operational" : "Offline"}
+              <span className={`dot ${connection === 'online' ? "dot-green" : connection === 'connecting' ? "dot-amber" : "dot-red"}`}></span>
+              {connection === 'online' ? 'Operational' : connection === 'connecting' ? 'Waking up…' : 'Offline'}
             </span>
           </div>
           <div className="metric">
@@ -493,6 +532,9 @@ export default function App() {
             <span className="metric-value">{summary?.ingestion_rate_per_min ?? 0}/min</span>
           </div>
         </div>
+        {connectionHint && (
+          <p className="connection-hint" role="status">{connectionHint}</p>
+        )}
       </header>
 
       {/* Main 3-Column Layout */}
@@ -575,10 +617,10 @@ export default function App() {
               <div className="layer-controls">
                 <div className="zoom-control">
                   <span>Zoom</span>
-                  <button className="btn-back zoom-button" onClick={() => zoomMapBy(-0.25)} disabled={mapZoom <= 1} aria-label="Zoom out">-</button>
+                  <button className="btn-back zoom-button" onClick={() => zoomMapBy(-0.1)} disabled={mapZoom <= 1} aria-label="Zoom out">-</button>
                   <span className="zoom-value">{mapZoom.toFixed(1)}x</span>
-                  <button className="btn-back zoom-button" onClick={() => zoomMapBy(0.25)} disabled={mapZoom >= 3} aria-label="Zoom in">+</button>
-                  <button className="btn-back zoom-reset" onClick={() => setMapZoom(1)}>Reset</button>
+                  <button className="btn-back zoom-button" onClick={() => zoomMapBy(0.1)} disabled={mapZoom >= 3} aria-label="Zoom in">+</button>
+                  <button className="btn-back zoom-reset" onClick={() => setMapZoom(1)} aria-label="Reset zoom">Reset</button>
                 </div>
                 <label>
                   <input type="checkbox" checked={showTransformersLayer} onChange={e => setShowTransformersLayer(e.target.checked)} />
@@ -608,9 +650,29 @@ export default function App() {
 
           <div
             className="map-canvas-container"
+            onMouseDown={(e) => {
+              panRef.current.isPanning = true;
+              panRef.current.startX = e.clientX;
+              panRef.current.startY = e.clientY;
+              panRef.current.startPanX = panX;
+              panRef.current.startPanY = panY;
+            }}
+            onMouseMove={(e) => {
+              if (!panRef.current.isPanning) return;
+              const dx = e.clientX - panRef.current.startX;
+              const dy = e.clientY - panRef.current.startY;
+              setPanX(panRef.current.startPanX + dx);
+              setPanY(panRef.current.startPanY + dy);
+            }}
+            onMouseUp={() => {
+              panRef.current.isPanning = false;
+            }}
+            onMouseLeave={() => {
+              panRef.current.isPanning = false;
+            }}
             onWheel={(event) => {
               event.preventDefault();
-              zoomMapBy(event.deltaY > 0 ? -0.15 : 0.15);
+              zoomMapBy(event.deltaY > 0 ? -0.1 : 0.1);
             }}
           >
             <svg viewBox={mapViewBox} className="topology-svg">
@@ -721,13 +783,22 @@ export default function App() {
                   {/* Pole Nodes */}
                   {showPolesLayer && selectedDT.poles.map(pole => {
                     const { x, y } = getCoordinates(pole.lat, pole.lon);
-                    
-                    // Node color status
+                    const dtOutage = isDtSourceOutage(selectedDT.dt_id, selectedDT.feeder_id, incidents);
+
+                    // Map color: telemetry first. Unmonitored poles look grey unless
+                    // the whole DT/feeder is in outage — then they are physically dark too.
                     let statusColorClass = "live";
                     if (pole.suspect_sensor || pole.status === "suspect_sensor") {
                       statusColorClass = "suspect";
                     } else if (pole.energized === false) {
                       statusColorClass = "dark";
+                    } else if (pole.energized === true) {
+                      statusColorClass = "live";
+                    } else if (dtOutage) {
+                      // No device / unknown during DT or feeder outage
+                      statusColorClass = "inferred-dark";
+                    } else if (!pole.device_id || pole.energized == null) {
+                      statusColorClass = "unknown";
                     }
 
                     return (

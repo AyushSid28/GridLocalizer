@@ -115,6 +115,21 @@ body {
   background-color: var(--live-green);
 }
 
+.dot-red {
+  background-color: var(--dark-red);
+}
+
+.dot-amber {
+  background-color: var(--warning-orange);
+}
+
+.connection-hint {
+  margin: 0.35rem 0 0;
+  padding: 0 1.25rem 0.5rem;
+  font-size: 0.8rem;
+  color: var(--warning-orange);
+}
+
 /* 3-Column Layout */
 .dashboard-grid {
   display: grid;
@@ -449,7 +464,7 @@ body {
   align-items: center;
   justify-content: center;
   background-color: #080d12;
-  overflow: hidden;
+  overflow: auto; /* enable native scrollbars */
   padding: 1rem;
 }
 
@@ -458,7 +473,7 @@ body {
   height: 100%;
   max-width: 800px;
   max-height: 550px;
-  border: 1px solid var(--border-color);
+  border: none; /* removed blue border */
   background-color: #060a0e;
 }
 
@@ -506,7 +521,13 @@ body {
 
 .pole-node.live .pole-circle { fill: var(--live-green); }
 .pole-node.dark .pole-circle { fill: var(--dark-red); }
-.pole-node.inferred-dark .pole-circle { fill: var(--warning-orange); }
+.pole-node.inferred-dark .pole-circle { fill: var(--dark-red); opacity: 0.75; }
+.pole-node.unknown .pole-circle {
+  fill: #4a5a68;
+  stroke: #8a9bab;
+  stroke-width: 1.5px;
+  stroke-dasharray: 3 2;
+}
 .pole-node.suspect .pole-circle {
   fill: #de8e35;
   stroke: #fff;
