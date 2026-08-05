@@ -4,7 +4,7 @@ Editable source for the diagram in the [README](../README.md) and [ARCHITECTURE.
 
 **Mermaid Chart (edit online):** https://mermaid.ai/app/projects/c8a88bf0-6185-46de-8264-3d9d3631bdc5/diagrams/24a90605-4b73-4d7b-b8c4-d24d10c8e364/version/v0.1/edit
 
-Optional PNG for slides: export from Mermaid Chart at 2x scale → `images/system-flow.png`.
+Committed diagram: `images/system-flow.svg` (export from Mermaid Chart).
 
 ---
 

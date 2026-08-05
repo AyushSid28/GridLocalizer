@@ -23,6 +23,7 @@ MAINDOCS/
 .clone-test/
 backend/package-lock.json
 schedule-state.txt
+Electrical Grid Fault.svg
 commit-messages.txt
 commit-paths.txt
 commit-schedule.sh
