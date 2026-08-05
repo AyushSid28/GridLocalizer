@@ -24,6 +24,13 @@ from app.services.localization import run_global_localization
 from app.api.sim import clear_noise, inject_fault, repair_fault, inject_noise, run_scenario, ClearNoiseIn, FaultInjectionIn, NoiseInjectionIn, ScenarioFault, ScenarioIn
 from app.worker import process_event
 
+
+def _redis_with_pipeline():
+    r_mock = MagicMock()
+    pipe = MagicMock()
+    r_mock.pipeline.return_value = pipe
+    return r_mock, pipe
+
 engine = create_engine("sqlite:///:memory:")
 TestingSessionLocal = sessionmaker(bind=engine)
 
@@ -87,7 +94,7 @@ def test_db():
 
 
 def test_fault_injection_and_repair(test_db):
-    r_mock = MagicMock()
+    r_mock, pipe = _redis_with_pipeline()
     settings_mock = MagicMock()
     settings_mock.telemetry_stream = "test.telemetry"
 
@@ -108,6 +115,8 @@ def test_fault_injection_and_repair(test_db):
 
     # Reset mock and repair
     r_mock.reset_mock()
+    pipe = MagicMock()
+    r_mock.pipeline.return_value = pipe
     res = repair_fault(
         FaultInjectionIn(kind="dt", target_id="DT-1"),
         db=test_db,
@@ -120,7 +129,8 @@ def test_fault_injection_and_repair(test_db):
     state = test_db.get(PoleState, "P-01")
     assert state.energized is True
     assert state.last_event == "power_restored"
-    assert r_mock.xadd.call_count == 2
+    assert pipe.xadd.call_count == 2
+    pipe.execute.assert_called_once()
 
 
 def test_noise_injection(test_db):
@@ -145,7 +155,7 @@ def test_noise_injection(test_db):
     payload = json.loads(r_mock.xadd.call_args.args[1]["payload"])
     assert payload["event"] == "heartbeat"
     assert payload["energized"] is True
-    assert process_event(test_db, r_mock, payload) is True
+    assert process_event(test_db, r_mock, payload, set()) is True
     assert run_global_localization(test_db) == []
 
     r_mock.reset_mock()
@@ -174,7 +184,7 @@ def test_noise_injection(test_db):
 
 
 def test_simulator_repair_events_are_processed_by_worker(test_db):
-    r_mock = MagicMock()
+    r_mock, pipe = _redis_with_pipeline()
     settings_mock = MagicMock()
     settings_mock.telemetry_stream = "test.telemetry"
 
@@ -186,11 +196,11 @@ def test_simulator_repair_events_are_processed_by_worker(test_db):
     )
 
     assert res["repaired"] is True
-    payloads = [call.args[1]["payload"] for call in r_mock.xadd.call_args_list]
+    payloads = [call.args[1]["payload"] for call in pipe.xadd.call_args_list]
     assert [json.loads(p)["event"] for p in payloads] == ["boot", "power_restored"]
 
     for raw in payloads:
-        assert process_event(test_db, r_mock, json.loads(raw)) is True
+        assert process_event(test_db, r_mock, json.loads(raw), set()) is True
 
     state = test_db.get(PoleState, "P-01")
     assert state.energized is True
@@ -291,7 +301,7 @@ def test_multi_dt_scenario_publishes_without_500(test_db):
     test_db.commit()
     refresh_topology(test_db)
 
-    r_mock = MagicMock()
+    r_mock, pipe = _redis_with_pipeline()
     settings_mock = MagicMock()
     settings_mock.telemetry_stream = "test.telemetry"
 
@@ -319,8 +329,8 @@ def test_multi_dt_scenario_publishes_without_500(test_db):
         assert state.energized is False
 
     # Telemetry publish is lossy (fw 1.2 + ~30% miss) — only process what arrived.
-    for call in r_mock.xadd.call_args_list:
-        assert process_event(test_db, r_mock, json.loads(call.args[1]["payload"])) is True
+    for call in pipe.xadd.call_args_list:
+        assert process_event(test_db, r_mock, json.loads(call.args[1]["payload"]), set()) is True
 
     incidents = run_global_localization(test_db)
     assert len(incidents) == 3

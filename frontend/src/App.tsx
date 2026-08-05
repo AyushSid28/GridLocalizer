@@ -232,19 +232,17 @@ export default function App() {
   const [panY, setPanY] = useState(0);
   const panRef = useRef({ isPanning: false, startX: 0, startY: 0, startPanX: 0, startPanY: 0 });  const [refreshTick, setRefreshTick] = useState(0);
 
-  // Poll DB state
+  // Poll lightweight API state (avoid /network/dts here — it is slow)
   useEffect(() => {
     async function fetchData() {
       try {
-        const [healthData, summaryData, dtData, incData] = await Promise.all([
+        const [healthData, summaryData, incData] = await Promise.all([
           api.fetchHealth(),
           api.fetchSummary(),
-          api.fetchDTs(),
           api.fetchIncidents(),
         ]);
         void healthData;
         setSummary(summaryData);
-        setDts(dtData);
         setIncidents(incData);
         failCountRef.current = 0;
         setConnection('online');
@@ -281,6 +279,21 @@ export default function App() {
     return () => clearInterval(interval);
   }, [refreshTick]);
 
+  // DT list for grid view — refreshed less often (heavy endpoint)
+  useEffect(() => {
+    async function fetchDts() {
+      try {
+        const dtData = await api.fetchDTs();
+        setDts(dtData);
+      } catch (err) {
+        console.error("Error fetching DT list", err);
+      }
+    }
+    fetchDts();
+    const interval = setInterval(fetchDts, 30_000);
+    return () => clearInterval(interval);
+  }, [refreshTick]);
+
   // Load detailed DT data when selected
   useEffect(() => {
     if (!selectedDTId) {
@@ -297,13 +310,6 @@ export default function App() {
     }
     fetchDTDetail();
   }, [selectedDTId, incidents, refreshTick]);
-
-  // Auto focus map to DT when selecting an incident
-  useEffect(() => {
-    if (selectedIncident && selectedIncident.dt_id) {
-      setSelectedDTId(selectedIncident.dt_id);
-    }
-  }, [selectedIncident]);
 
   // FSM Event Handlers
   async function handleAcknowledge(id: string) {
@@ -395,6 +401,12 @@ export default function App() {
         });
       }
       setSimResponse(`Success: ${action === "inject" ? "Outage injected" : "Outage repaired"} (${data.affected_devices} telemetry devices signaled)`);
+      try {
+        const dtData = await api.fetchDTs();
+        setDts(dtData);
+      } catch {
+        /* grid list refresh is best-effort */
+      }
       // Nudge pollers so map colors catch up after worker processes telemetry
       window.setTimeout(() => setRefreshTick((n) => n + 1), 800);
       window.setTimeout(() => setRefreshTick((n) => n + 1), 2500);
@@ -568,6 +580,9 @@ export default function App() {
                     className={`incident-card severity-${inc.kind} ${isSelected ? "selected" : ""}`}
                     onClick={() => {
                       setSelectedIncident(inc);
+                      if (inc.dt_id) {
+                        setSelectedDTId(inc.dt_id);
+                      }
                       setFocusedPole(null);
                       setIncidentSummary(null);
                     }}
@@ -643,7 +658,7 @@ export default function App() {
             </div>
             {selectedDTId && (
               <div className="map-breadcrumb-row">
-                <Breadcrumb dtId={selectedDTId} apiBase={apiBase} />
+                <Breadcrumb dtId={selectedDTId} />
               </div>
             )}
           </div>

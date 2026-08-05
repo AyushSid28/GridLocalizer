@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models import Pole, PoleState, Incident, TicketStatus
+from app.models import FaultKind, Pole, PoleState, Incident, TicketStatus
 from app.services.topo_index import get_topology
 from app.settings import get_settings, Settings
 
@@ -91,6 +91,29 @@ def next_seq(state: PoleState | None, offset: int = 1) -> int:
     return ((state.last_seq if state else 0) or 0) + offset
 
 
+def _event_payload(
+    pole: Pole,
+    event: str,
+    energized: bool,
+    seq: int,
+    ts: datetime,
+    fw: str,
+    battery_mv: int,
+    rssi: int,
+) -> dict:
+    return {
+        "device_id": pole.device_id,
+        "pole_id": pole.id,
+        "event": event,
+        "energized": energized,
+        "ts": ts.isoformat(),
+        "seq": seq,
+        "battery_mv": battery_mv,
+        "rssi": rssi,
+        "fw": fw,
+    }
+
+
 def publish_event(
     r: redis.Redis,
     stream: str,
@@ -103,18 +126,24 @@ def publish_event(
     battery_mv: int,
     rssi: int,
 ) -> None:
-    payload = {
-        "device_id": pole.device_id,
-        "pole_id": pole.id,
-        "event": event,
-        "energized": energized,
-        "ts": ts.isoformat(),
-        "seq": seq,
-        "battery_mv": battery_mv,
-        "rssi": rssi,
-        "fw": fw,
-    }
+    payload = _event_payload(pole, event, energized, seq, ts, fw, battery_mv, rssi)
     r.xadd(stream, {"payload": json.dumps(payload)})
+
+
+def queue_event(
+    pipe: redis.client.Pipeline,
+    stream: str,
+    pole: Pole,
+    event: str,
+    energized: bool,
+    seq: int,
+    ts: datetime,
+    fw: str,
+    battery_mv: int,
+    rssi: int,
+) -> None:
+    payload = _event_payload(pole, event, energized, seq, ts, fw, battery_mv, rssi)
+    pipe.xadd(stream, {"payload": json.dumps(payload)})
 
 
 def mark_pole_dark(
@@ -126,6 +155,7 @@ def mark_pole_dark(
     *,
     publish: bool = True,
     state: PoleState | None = None,
+    pipe: redis.client.Pipeline | None = None,
 ) -> bool:
     """
     Apply physical outage to one pole.
@@ -162,18 +192,21 @@ def mark_pole_dark(
         should_publish = False
 
     if should_publish:
-        publish_event(
-            r,
-            stream,
-            pole,
-            "power_lost",
-            False,
-            seq,
-            now,
-            fw,
-            3400,
-            -85,
-        )
+        if pipe is not None:
+            queue_event(pipe, stream, pole, "power_lost", False, seq, now, fw, 3400, -85)
+        else:
+            publish_event(
+                r,
+                stream,
+                pole,
+                "power_lost",
+                False,
+                seq,
+                now,
+                fw,
+                3400,
+                -85,
+            )
 
     return True
 
@@ -203,9 +236,17 @@ def inject_fault(
     pole_ids = [p.id for p in poles]
     states = {s.pole_id: s for s in db.scalars(select(PoleState).where(PoleState.pole_id.in_(pole_ids))).all()}
 
+    pipe = r.pipeline()
     for p in poles:
-        if mark_pole_dark(db, r, settings.telemetry_stream, p, now, state=states.get(p.id)):
+        if mark_pole_dark(
+            db, r, settings.telemetry_stream, p, now, state=states.get(p.id), pipe=pipe
+        ):
             affected_count += 1
+
+    try:
+        pipe.execute()
+    except redis.RedisError as e:
+        log.warning("Redis pipeline failed during inject (DB state still updated): %s", e)
 
     try:
         db.commit()
@@ -253,6 +294,7 @@ def repair_fault(
     pole_ids = [p.id for p in poles]
     states = {s.pole_id: s for s in db.scalars(select(PoleState).where(PoleState.pole_id.in_(pole_ids))).all()}
 
+    pipe = r.pipeline()
     for p in poles:
         if not p.device_id:
             continue
@@ -268,11 +310,20 @@ def repair_fault(
         b_seq = next_seq(state)
         r_seq = next_seq(state, 2)
 
-        publish_event(
-            r, settings.telemetry_stream, p, "boot", True, b_seq, now, fw, 3750, -72
+        queue_event(
+            pipe, settings.telemetry_stream, p, "boot", True, b_seq, now, fw, 3750, -72
         )
-        publish_event(
-            r, settings.telemetry_stream, p, "power_restored", True, r_seq, now + timedelta(milliseconds=100), fw, 3800, -70
+        queue_event(
+            pipe,
+            settings.telemetry_stream,
+            p,
+            "power_restored",
+            True,
+            r_seq,
+            now + timedelta(milliseconds=100),
+            fw,
+            3800,
+            -70,
         )
         
         # Synchronously update DB for instant demo response
@@ -288,6 +339,11 @@ def repair_fault(
 
         affected_count += 1
 
+    try:
+        pipe.execute()
+    except redis.RedisError as e:
+        log.warning("Redis pipeline failed during repair (DB state still updated): %s", e)
+
     # Auto-close related active incidents immediately for fast demo
     if data.kind == "dt" and data.target_id:
         stmt = select(Incident).where(Incident.dt_id == data.target_id, Incident.status != TicketStatus.closed)
@@ -297,6 +353,17 @@ def repair_fault(
             inc.verify_note = "Auto-closed via synchronous repair API"
     elif data.kind == "feeder" and data.target_id:
         stmt = select(Incident).where(Incident.feeder_id == data.target_id, Incident.status != TicketStatus.closed)
+        for inc in db.scalars(stmt).all():
+            inc.status = TicketStatus.closed
+            inc.closed_at = now
+            inc.verify_note = "Auto-closed via synchronous repair API"
+    elif data.kind == "span" and data.span_from and data.span_to:
+        stmt = select(Incident).where(
+            Incident.kind == FaultKind.span,
+            Incident.span_from == data.span_from,
+            Incident.span_to == data.span_to,
+            Incident.status != TicketStatus.closed,
+        )
         for inc in db.scalars(stmt).all():
             inc.status = TicketStatus.closed
             inc.closed_at = now
@@ -468,6 +535,7 @@ def run_scenario(
         payload_for_log = [fault.model_dump() for fault in data.faults]
         log.info("Scenario simulation requested: %s", payload_for_log)
 
+        pipe = r.pipeline()
         for fault in data.faults:
             fault_in = FaultInjectionIn(
                 kind=fault.kind,
@@ -485,8 +553,21 @@ def run_scenario(
 
             for p in poles:
                 all_dt_ids.add(p.dt_id)
-                if mark_pole_dark(db, r, settings.telemetry_stream, p, now, state=states.get(p.id)):
+                if mark_pole_dark(
+                    db,
+                    r,
+                    settings.telemetry_stream,
+                    p,
+                    now,
+                    state=states.get(p.id),
+                    pipe=pipe,
+                ):
                     total_affected += 1
+
+        try:
+            pipe.execute()
+        except redis.RedisError as e:
+            log.warning("Redis pipeline failed during scenario inject: %s", e)
 
         db.commit()
 

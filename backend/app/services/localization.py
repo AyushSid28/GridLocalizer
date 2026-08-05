@@ -352,6 +352,47 @@ def run_localization_for_dt(db: Session, dt_id: str, states_cache: dict[str, Pol
     return incidents
 
 
+def _incident_asset_key(inc: Incident) -> tuple:
+    return (inc.kind, inc.feeder_id, inc.dt_id, inc.span_from, inc.span_to)
+
+
+def _refresh_detected_fields(target: Incident, source: Incident) -> None:
+    target.affected_poles = source.affected_poles
+    target.confidence = source.confidence
+    target.evidence = source.evidence
+    target.reasons = source.reasons
+    target.lat = source.lat
+    target.lon = source.lon
+    target.pincode = source.pincode
+    target.topology_mode = source.topology_mode
+    target.summary = source.summary
+    target.feeder_id = source.feeder_id
+    target.dt_id = source.dt_id
+    target.span_from = source.span_from
+    target.span_to = source.span_to
+
+
+def _persist_detected_incidents(db: Session, final_incidents: list[Incident]) -> None:
+    """Upsert detected tickets by asset key so polling does not churn incident IDs."""
+    final_keys = {_incident_asset_key(inc) for inc in final_incidents}
+    existing_detected = list(
+        db.scalars(select(Incident).where(Incident.status == TicketStatus.detected)).all()
+    )
+    existing_by_key = {_incident_asset_key(row): row for row in existing_detected}
+
+    for inc in final_incidents:
+        key = _incident_asset_key(inc)
+        existing = existing_by_key.get(key)
+        if existing:
+            _refresh_detected_fields(existing, inc)
+        else:
+            db.add(inc)
+
+    for key, row in existing_by_key.items():
+        if key not in final_keys:
+            db.delete(row)
+
+
 def run_global_localization(db: Session) -> list[Incident]:
     """
     Run fault localization across the entire grid.
@@ -475,16 +516,19 @@ def run_global_localization(db: Session) -> list[Incident]:
                             Incident.dt_id == inc.dt_id,
                             Incident.span_from == inc.span_from,
                             Incident.span_to == inc.span_to,
-                            Incident.status.in_([TicketStatus.acknowledged, TicketStatus.crew_assigned, TicketStatus.resolved])
+                            Incident.status.in_([
+                                TicketStatus.detected,
+                                TicketStatus.acknowledged,
+                                TicketStatus.crew_assigned,
+                                TicketStatus.resolved,
+                            ]),
                         ).limit(1)
                     )
                     if not active_exists:
                         final_incidents.append(inc)
 
-    # 4. Save to Database
-    db.query(Incident).filter(Incident.status == TicketStatus.detected).delete()
-    for inc in final_incidents:
-        db.add(inc)
+    # 4. Save to Database (upsert detected; leave in-progress tickets untouched)
+    _persist_detected_incidents(db, final_incidents)
     db.commit()
 
     return final_incidents

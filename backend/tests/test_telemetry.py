@@ -40,8 +40,10 @@ def test_process_event_deduplication_and_state(db_session):
     }
     r_mock = MagicMock()
 
+    dirty: set[str] = set()
+
     # First processing
-    success = process_event(db_session, r_mock, data)
+    success = process_event(db_session, r_mock, data, dirty)
     assert success is True
 
     # Verify event recorded in ProcessedEvent
@@ -65,7 +67,7 @@ def test_process_event_deduplication_and_state(db_session):
     assert state.firmware == "1.4.2"
 
     # Duplicate processing should be skipped
-    success_dup = process_event(db_session, r_mock, data)
+    success_dup = process_event(db_session, r_mock, data, dirty)
     assert success_dup is True  # returns True (skipped cleanly without error)
 
     # Modify some values and send a new sequence number
@@ -74,7 +76,7 @@ def test_process_event_deduplication_and_state(db_session):
     data_new["energized"] = False
     data_new["event"] = "power_lost"
 
-    success_new = process_event(db_session, r_mock, data_new)
+    success_new = process_event(db_session, r_mock, data_new, dirty)
     assert success_new is True
 
     # Verify PoleState is updated to new values
@@ -87,7 +89,7 @@ def test_process_event_deduplication_and_state(db_session):
     stale["seq"] = 10
     stale["energized"] = True
     stale["event"] = "heartbeat"
-    success_stale = process_event(db_session, r_mock, stale)
+    success_stale = process_event(db_session, r_mock, stale, dirty)
     assert success_stale is True
     state_after_stale = db_session.get(PoleState, "P-000001")
     assert state_after_stale.energized is False
@@ -97,13 +99,13 @@ def test_process_event_deduplication_and_state(db_session):
     restored["seq"] = 12
     restored["energized"] = True
     restored["event"] = "power_restored"
-    assert process_event(db_session, r_mock, restored) is True
+    assert process_event(db_session, r_mock, restored, dirty) is True
 
     boot = data.copy()
     boot["seq"] = 13
     boot["energized"] = True
     boot["event"] = "boot"
-    assert process_event(db_session, r_mock, boot) is True
+    assert process_event(db_session, r_mock, boot, dirty) is True
 
     state_restored = db_session.get(PoleState, "P-000001")
     assert state_restored.last_power_restored_seq == 12

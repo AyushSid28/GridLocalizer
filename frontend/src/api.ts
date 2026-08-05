@@ -68,6 +68,12 @@ export async function fetchIncidents() {
   return res.json();
 }
 
+export async function fetchBreadcrumb(dtId: string) {
+  const res = await fetchWithTimeout(`/breadcrumb/dt/${dtId}`);
+  if (!res.ok) throw new Error(`Breadcrumb fetch failed: ${res.status}`);
+  return res.json();
+}
+
 async function postJson(path: string, body?: unknown) {
   const res = await fetchWithTimeout(path, {
     method: "POST",

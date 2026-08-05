@@ -69,28 +69,35 @@ def network_summary(db: Session = Depends(get_db)) -> dict:
 @router.get("/dts")
 def list_dts(db: Session = Depends(get_db)) -> list[dict]:
     rows = db.scalars(select(DistributionTransformer).order_by(DistributionTransformer.id)).all()
-    out = []
-    for dt in rows:
-        n = db.scalar(select(func.count()).select_from(Pole).where(Pole.dt_id == dt.id)) or 0
-        dark_n = db.scalar(
-            select(func.count())
+    pole_counts = dict(
+        db.execute(
+            select(Pole.dt_id, func.count())
+            .where(Pole.dt_id.is_not(None))
+            .group_by(Pole.dt_id)
+        ).all()
+    )
+    dark_counts = dict(
+        db.execute(
+            select(Pole.dt_id, func.count())
             .select_from(PoleState)
             .join(Pole, Pole.id == PoleState.pole_id)
-            .where(Pole.dt_id == dt.id, PoleState.energized.is_(False))
-        ) or 0
-        out.append(
-            {
-                "dt_id": dt.id,
-                "feeder_id": dt.feeder_id,
-                "lat": dt.lat,
-                "lon": dt.lon,
-                "households": dt.households,
-                "wiring_known": dt.wiring_known,
-                "pole_count": n,
-                "dark_poles": dark_n,
-            }
-        )
-    return out
+            .where(PoleState.energized.is_(False))
+            .group_by(Pole.dt_id)
+        ).all()
+    )
+    return [
+        {
+            "dt_id": dt.id,
+            "feeder_id": dt.feeder_id,
+            "lat": dt.lat,
+            "lon": dt.lon,
+            "households": dt.households,
+            "wiring_known": dt.wiring_known,
+            "pole_count": pole_counts.get(dt.id, 0),
+            "dark_poles": dark_counts.get(dt.id, 0),
+        }
+        for dt in rows
+    ]
 
 
 

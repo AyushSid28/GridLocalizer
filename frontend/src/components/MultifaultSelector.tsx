@@ -153,16 +153,14 @@ const MultifaultSelector: React.FC<MultifaultSelectorProps> = ({ dts, feeders, i
     setIsRestoring(true);
     setMessage(null);
     try {
-      await Promise.all(
-        faultsToRestore.map(f =>
-          api.repairSimulation({
-            kind: f.kind,
-            target_id: f.target_id ?? null,
-            span_from: f.span_from ?? null,
-            span_to: f.span_to ?? null,
-          })
-        )
-      );
+      for (const f of faultsToRestore) {
+        await api.repairSimulation({
+          kind: f.kind,
+          target_id: f.target_id ?? null,
+          span_from: f.span_from ?? null,
+          span_to: f.span_to ?? null,
+        });
+      }
       setMessage(`Restore telemetry sent for ${faultsToRestore.length} outage(s).`);
       setLastInjected([]);
       clearLastInjectedScenario();

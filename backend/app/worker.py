@@ -159,9 +159,8 @@ def main() -> None:
             now = time.time()
             if now - last_debounce_check >= 2.0:
                 last_debounce_check = now
-                keys = r.keys("dt_dirty:*")
                 ready_dt_ids = set()
-                for key in keys:
+                for key in r.scan_iter("dt_dirty:*", count=50):
                     dirty_time = float(r.get(key) or 0)
                     if now - dirty_time >= settings.detect_wait_sec:
                         dt_id = key.split(":")[-1]

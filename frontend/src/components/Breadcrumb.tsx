@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import * as api from "../api";
 
 type BreadcrumbData = {
   substation_id: string;
@@ -10,10 +11,9 @@ type BreadcrumbData = {
 
 type Props = {
   dtId: string | null;
-  apiBase: string;
 };
 
-export const Breadcrumb: React.FC<Props> = ({ dtId, apiBase }) => {
+export const Breadcrumb: React.FC<Props> = ({ dtId }) => {
   const [data, setData] = useState<BreadcrumbData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -24,13 +24,11 @@ export const Breadcrumb: React.FC<Props> = ({ dtId, apiBase }) => {
       return;
     }
     let cancelled = false;
-    const fetchBreadcrumb = async () => {
+    const load = async () => {
       setLoading(true);
       setError(null);
       try {
-        const res = await fetch(`${apiBase}/breadcrumb/dt/${dtId}`);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const json = (await res.json()) as BreadcrumbData;
+        const json = (await api.fetchBreadcrumb(dtId)) as BreadcrumbData;
         if (!cancelled) setData(json);
       } catch (e) {
         console.error("Breadcrumb fetch error", e);
@@ -39,11 +37,11 @@ export const Breadcrumb: React.FC<Props> = ({ dtId, apiBase }) => {
         if (!cancelled) setLoading(false);
       }
     };
-    fetchBreadcrumb();
+    load();
     return () => {
       cancelled = true;
     };
-  }, [dtId, apiBase]);
+  }, [dtId]);
 
   if (!dtId) return null;
   if (loading) return <div className="breadcrumb muted">Loading hierarchy…</div>;

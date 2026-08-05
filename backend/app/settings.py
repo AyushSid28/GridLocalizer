@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
     telemetry_stream: str = "telemetry.inbound"
     detect_wait_sec: int = 3
+    expose_error_details: bool = False
     cors_origins: str = (
         "http://localhost:5173,http://localhost:3000,"
         "https://gridlocalizer.vercel.app,https://www.gridlocalizer.vercel.app"

@@ -45,13 +45,19 @@ def create_app() -> FastAPI:
 
     from fastapi.responses import JSONResponse
     from fastapi import Request
+    import logging
     import traceback
+
+    log = logging.getLogger(__name__)
+
     @app.exception_handler(Exception)
     async def global_exception_handler(request: Request, exc: Exception):
-        return JSONResponse(
-            status_code=500,
-            content={"detail": f"Internal Server Error: {traceback.format_exc()}"}
-        )
+        log.exception("Unhandled error on %s %s", request.method, request.url.path)
+        if settings.expose_error_details:
+            detail = f"Internal Server Error: {traceback.format_exc()}"
+        else:
+            detail = "Internal Server Error"
+        return JSONResponse(status_code=500, content={"detail": detail})
 
     app.include_router(api_router)
     return app
