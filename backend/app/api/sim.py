@@ -125,6 +125,7 @@ def mark_pole_dark(
     now: datetime,
     *,
     publish: bool = True,
+    state: PoleState | None = None,
 ) -> bool:
     """
     Apply physical outage to one pole.
@@ -137,7 +138,8 @@ def mark_pole_dark(
     if not pole.device_id:
         return False
 
-    state = db.get(PoleState, pole.id)
+    if state is None:
+        state = db.get(PoleState, pole.id)
     if state is None:
         state = PoleState(pole_id=pole.id, device_id=pole.device_id, firmware="1.4.2")
         db.add(state)
@@ -186,9 +188,12 @@ def inject_fault(
     poles = get_affected_poles(db, data)
     affected_count = 0
     now = datetime.now(timezone.utc)
+    
+    pole_ids = [p.id for p in poles]
+    states = {s.pole_id: s for s in db.scalars(select(PoleState).where(PoleState.pole_id.in_(pole_ids))).all()}
 
     for p in poles:
-        if mark_pole_dark(db, r, settings.telemetry_stream, p, now):
+        if mark_pole_dark(db, r, settings.telemetry_stream, p, now, state=states.get(p.id)):
             affected_count += 1
 
     db.commit()
@@ -221,11 +226,19 @@ def repair_fault(
     
     dt_ids = {p.dt_id for p in poles}
 
+    pole_ids = [p.id for p in poles]
+    states = {s.pole_id: s for s in db.scalars(select(PoleState).where(PoleState.pole_id.in_(pole_ids))).all()}
+
     for p in poles:
         if not p.device_id:
             continue
 
-        state = db.get(PoleState, p.id)
+        state = states.get(p.id)
+        if state is None:
+            # Create dummy state if none exists yet, so repair works
+            state = PoleState(pole_id=p.id, device_id=p.device_id, firmware="1.4.2")
+            db.add(state)
+
         fw = state.firmware if state else "1.4.2"
         
         b_seq = next_seq(state)
@@ -441,9 +454,12 @@ def run_scenario(
                 target = fault_in.target_id or f"{fault_in.span_from}->{fault_in.span_to}"
                 raise HTTPException(404, f"No poles found for {fault.kind} fault target {target}")
 
+            pole_ids = [p.id for p in poles]
+            states = {s.pole_id: s for s in db.scalars(select(PoleState).where(PoleState.pole_id.in_(pole_ids))).all()}
+
             for p in poles:
                 all_dt_ids.add(p.dt_id)
-                if mark_pole_dark(db, r, settings.telemetry_stream, p, now):
+                if mark_pole_dark(db, r, settings.telemetry_stream, p, now, state=states.get(p.id)):
                     total_affected += 1
 
         db.commit()

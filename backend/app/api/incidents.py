@@ -111,7 +111,7 @@ def assign_crew(
     if not inc:
         raise HTTPException(status_code=404, detail="Incident not found")
 
-    if inc.status not in [TicketStatus.detected, TicketStatus.acknowledged]:
+    if inc.status not in [TicketStatus.detected, TicketStatus.acknowledged, TicketStatus.crew_assigned]:
         raise HTTPException(
             status_code=400,
             detail=f"Cannot assign crew to incident in status {inc.status.value}",
