@@ -1,9 +1,0 @@
-add fault localization with confidence grouping and tests
-wire network and breadcrumb apis into the app router
-add sim endpoints for span dt feeder faults and sensor noise
-add incident tickets verify flow and grounded explain
-hook up control room ui map list and multifault controls
-tidy compose healthchecks nginx proxy and env wiring
-add tests for sim noise tickets and explain fallback
-move design notes into MAINDOCS and refresh the readme
-add staged commit helper scripts for the remaining handoff

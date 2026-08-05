@@ -23,4 +23,7 @@ MAINDOCS/
 .clone-test/
 backend/package-lock.json
 schedule-state.txt
+commit-messages.txt
+commit-paths.txt
+commit-schedule.sh
 .vercel
