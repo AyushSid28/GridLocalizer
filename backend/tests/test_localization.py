@@ -220,11 +220,12 @@ def test_feeder_total_dark(test_db):
 
     incidents = run_global_localization(test_db)
 
-    assert len(incidents) == 1
-    inc = incidents[0]
-    assert inc.kind == FaultKind.feeder
-    assert inc.feeder_id == "F-TEST"
-    assert inc.affected_poles == 6
+    feeder = [i for i in incidents if i.kind == FaultKind.feeder]
+    dt_incidents = [i for i in incidents if i.kind == FaultKind.dt]
+    assert len(feeder) == 1
+    assert feeder[0].feeder_id == "F-TEST"
+    assert feeder[0].affected_poles == 6
+    assert len(dt_incidents) == 2
 
 
 def test_sensor_failure_dark_parent_live_child(test_db):

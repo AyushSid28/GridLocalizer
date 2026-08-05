@@ -389,8 +389,10 @@ def _persist_detected_incidents(db: Session, final_incidents: list[Incident]) ->
             db.add(inc)
 
     for key, row in existing_by_key.items():
-        if key not in final_keys:
-            db.delete(row)
+        if key in final_keys:
+            continue
+        # Outage may still be active but omitted from this localization pass (feeder
+        # rollup, debounce, suspect-sensor logic). Never drop open detected tickets here.
 
 
 def run_global_localization(db: Session) -> list[Incident]:
@@ -504,28 +506,26 @@ def run_global_localization(db: Session) -> list[Incident]:
             for d_id in dt_ids:
                 covered_dts.add(d_id)
 
-    # 3. Add all DT/span incidents not covered by feeder faults (checking for schedule suppression)
+    # 3. Add DT/span incidents (keep per-DT tickets even when a feeder fault is also inferred)
     for dt_id, incidents in all_dt_incidents.items():
-        if dt_id not in covered_dts:
-            for inc in incidents:
-                if not is_suppressed_by_schedule(db, inc.feeder_id, inc.dt_id):
-                    # Check if an active incident for the same asset exists
-                    active_exists = db.scalar(
-                        select(Incident.id).where(
-                            Incident.kind == inc.kind,
-                            Incident.dt_id == inc.dt_id,
-                            Incident.span_from == inc.span_from,
-                            Incident.span_to == inc.span_to,
-                            Incident.status.in_([
-                                TicketStatus.detected,
-                                TicketStatus.acknowledged,
-                                TicketStatus.crew_assigned,
-                                TicketStatus.resolved,
-                            ]),
-                        ).limit(1)
-                    )
-                    if not active_exists:
-                        final_incidents.append(inc)
+        for inc in incidents:
+            if not is_suppressed_by_schedule(db, inc.feeder_id, inc.dt_id):
+                active_exists = db.scalar(
+                    select(Incident.id).where(
+                        Incident.kind == inc.kind,
+                        Incident.dt_id == inc.dt_id,
+                        Incident.span_from == inc.span_from,
+                        Incident.span_to == inc.span_to,
+                        Incident.status.in_([
+                            TicketStatus.detected,
+                            TicketStatus.acknowledged,
+                            TicketStatus.crew_assigned,
+                            TicketStatus.resolved,
+                        ]),
+                    ).limit(1)
+                )
+                if not active_exists:
+                    final_incidents.append(inc)
 
     # 4. Save to Database (upsert detected; leave in-progress tickets untouched)
     _persist_detected_incidents(db, final_incidents)

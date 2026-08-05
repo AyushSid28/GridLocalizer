@@ -230,7 +230,9 @@ export default function App() {
   const [mapZoom, setMapZoom] = useState(1);
   const [panX, setPanX] = useState(0);
   const [panY, setPanY] = useState(0);
-  const panRef = useRef({ isPanning: false, startX: 0, startY: 0, startPanX: 0, startPanY: 0 });  const [refreshTick, setRefreshTick] = useState(0);
+  const panRef = useRef({ isPanning: false, startX: 0, startY: 0, startPanX: 0, startPanY: 0 });
+  const initialMapPanDone = useRef(false);
+  const [refreshTick, setRefreshTick] = useState(0);
 
   // Poll lightweight API state (avoid /network/dts here — it is slow)
   useEffect(() => {
@@ -250,7 +252,8 @@ export default function App() {
 
         setSelectedIncident((current) => {
           if (!current) return current;
-          return incData.find((i: Incident) => i.id === current.id) ?? current;
+          const updated = incData.find((i: Incident) => i.id === current.id);
+          return updated ?? null;
         });
       } catch (err) {
         console.error("Error polling data", err);
@@ -479,6 +482,25 @@ export default function App() {
 
   // Unique Feeders list for Simulation selection
   const uniqueFeeders = Array.from(new Set(dts.map(d => d.feeder_id)));
+  const focusMapOnIncident = (inc: Incident) => {
+    if (inc.kind === "dt" && inc.dt_id) {
+      setSelectedDTId(inc.dt_id);
+      setFocusedPole(null);
+      return;
+    }
+    if (inc.kind === "feeder" && inc.feeder_id) {
+      const match = dts.find((d) => d.feeder_id === inc.feeder_id);
+      if (match) {
+        setSelectedDTId(match.dt_id);
+        setFocusedPole(null);
+      }
+    }
+  };
+
+  const returnToGridView = () => {
+    setSelectedDTId(null);
+    setFocusedPole(null);
+  };
   const selectedLifecycle = selectedIncident ? getLifecycleStage(selectedIncident.status) : null;
   const clampMapZoom = (value: number) => Math.min(3, Math.max(1, Number(value.toFixed(1))));
   const zoomMapBy = (delta: number) => setMapZoom((current) => clampMapZoom(current + delta));
@@ -488,9 +510,10 @@ export default function App() {
   const viewBoxY = 225 - viewBoxHeight / 2 + panY;
   const mapViewBox = `${viewBoxX} ${viewBoxY} ${viewBoxWidth} ${viewBoxHeight}`;
 
-     // Auto-center the map on load based on DT positions
+     // Center map once when DT positions first load (do not re-center on every /network/dts poll)
    useEffect(() => {
-     if (dts.length === 0) return;
+     if (dts.length === 0 || initialMapPanDone.current) return;
+     initialMapPanDone.current = true;
      const coords = dts.map(dt => getCoordinates(dt.lat, dt.lon));
      const xs = coords.map(c => c.x);
      const ys = coords.map(c => c.y);
@@ -580,9 +603,6 @@ export default function App() {
                     className={`incident-card severity-${inc.kind} ${isSelected ? "selected" : ""}`}
                     onClick={() => {
                       setSelectedIncident(inc);
-                      if (inc.dt_id) {
-                        setSelectedDTId(inc.dt_id);
-                      }
                       setFocusedPole(null);
                       setIncidentSummary(null);
                     }}
@@ -616,6 +636,18 @@ export default function App() {
                         <span className="badge badge-inferred">Inferred</span>
                       )}
                       <span className="time-badge">{inc.pincode || "Location pending"}</span>
+                      {(inc.dt_id || inc.kind === "feeder") && (
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-compact"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            focusMapOnIncident(inc);
+                          }}
+                        >
+                          View on map
+                        </button>
+                      )}
                     </div>
                   </div>
                 );
@@ -650,7 +682,7 @@ export default function App() {
                   Outage Bounds
                 </label>
                 {selectedDTId && (
-                  <button className="btn-back" onClick={() => { setSelectedDTId(null); setFocusedPole(null); }}>
+                  <button className="btn-back" onClick={returnToGridView}>
                     Return to Grid View
                   </button>
                 )}
@@ -867,6 +899,16 @@ export default function App() {
                   <h3>INCIDENT: #{selectedIncident.id.slice(0, 8).toUpperCase()}</h3>
                   <span className={`status-badge large ${selectedIncident.status}`}>{getStatusLabel(selectedIncident.status)}</span>
                 </div>
+                {(selectedIncident.dt_id || selectedIncident.kind === "feeder") && (
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    style={{ marginBottom: "0.75rem" }}
+                    onClick={() => focusMapOnIncident(selectedIncident)}
+                  >
+                    View on map
+                  </button>
+                )}
 
                 <div className="info-grid">
                   <div className="info-row">
@@ -1126,8 +1168,16 @@ export default function App() {
                dts={dts}
                feeders={uniqueFeeders}
                incidents={incidents}
-               onResult={(msg) => {
+               onResult={async (msg) => {
                  setSimResponse(msg);
+                 if (msg) {
+                   try {
+                     const dtData = await api.fetchDTs();
+                     setDts(dtData);
+                   } catch {
+                     /* best-effort */
+                   }
+                 }
                  window.setTimeout(() => setRefreshTick((n) => n + 1), 800);
                  window.setTimeout(() => setRefreshTick((n) => n + 1), 2500);
                  window.setTimeout(() => setRefreshTick((n) => n + 1), 4500);
