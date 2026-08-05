@@ -192,17 +192,50 @@ function getApiErrorMessage(errData: any, fallback: string) {
   return fallback;
 }
 
-function getLifecycleStage(status: Incident["status"]) {
-  const stages = ["Fault detected", "Incident created", "Acknowledged", "Crew assigned", "Repair started", "Waiting for restoration telemetry", "Verified restored", "Closed"];
-  const activeIndex: Record<Incident["status"], number> = {
-    detected: 1,
-    acknowledged: 2,
-    crew_assigned: 3,
-    resolved: 6,
-    verified: 6,
-    closed: 7,
-  };
-  return { stages, activeIndex: activeIndex[status] };
+function getLifecycleStage(
+  status: Incident["status"],
+  options?: { restorationTelemetryReady?: boolean; repairStarted?: boolean },
+) {
+  const stages = [
+    "Fault detected",
+    "Incident created",
+    "Acknowledged",
+    "Crew assigned",
+    "Repair started",
+    "Waiting for restoration telemetry",
+    "Verified restored",
+    "Closed",
+  ];
+  const ready = options?.restorationTelemetryReady === true;
+  const repairStarted = options?.repairStarted === true;
+
+  let activeIndex: number;
+  if (status === "detected") activeIndex = 1;
+  else if (status === "acknowledged") activeIndex = 2;
+  else if (status === "crew_assigned") {
+    if (ready) activeIndex = 5;
+    else if (repairStarted) activeIndex = 4;
+    else activeIndex = 3;
+  } else if (status === "resolved") activeIndex = 6;
+  else if (status === "verified") activeIndex = 6;
+  else if (status === "closed") activeIndex = 7;
+  else activeIndex = 1;
+
+  return { stages, activeIndex };
+}
+
+function incidentMatchesSimScope(
+  incident: Incident,
+  kind: string,
+  targetId: string,
+  _spanFrom: string,
+  spanTo: string,
+): boolean {
+  if (kind === "dt" && incident.kind === "dt") return incident.dt_id === targetId;
+  if (kind === "feeder" && incident.kind === "feeder") return incident.feeder_id === targetId;
+  if (kind === "span" && incident.kind === "span") return incident.span_to === spanTo;
+  if (kind === "pole" && incident.kind === "span") return incident.span_to === targetId;
+  return false;
 }
 
 
@@ -249,6 +282,9 @@ export default function App() {
   const panRef = useRef({ isPanning: false, startX: 0, startY: 0, startPanX: 0, startPanY: 0 });
   const initialMapPanDone = useRef(false);
   const [refreshTick, setRefreshTick] = useState(0);
+  const [repairStartedIncidentIds, setRepairStartedIncidentIds] = useState<Set<string>>(
+    () => new Set(),
+  );
 
   // Poll lightweight API state (avoid /network/dts here — it is slow)
   useEffect(() => {
@@ -270,6 +306,16 @@ export default function App() {
           if (!current) return current;
           const updated = incData.find((i: Incident) => i.id === current.id);
           return updated ?? null;
+        });
+        setRepairStartedIncidentIds((prev) => {
+          const next = new Set(prev);
+          for (const id of prev) {
+            const inc = incData.find((i: Incident) => i.id === id);
+            if (!inc || inc.status === "closed" || inc.status === "verified") {
+              next.delete(id);
+            }
+          }
+          return next;
         });
       } catch (err) {
         console.error("Error polling data", err);
@@ -424,6 +470,19 @@ export default function App() {
           ? `Warning: ${data.warning} (${data.affected_devices ?? 0} devices signaled)`
           : `Success: ${action === "inject" ? "Outage injected" : "Outage repaired"} (${data.affected_devices} telemetry devices signaled)`,
       );
+      if (
+        action === "repair" &&
+        selectedIncident &&
+        incidentMatchesSimScope(
+          selectedIncident,
+          simKind,
+          simTargetId,
+          simSpanFrom,
+          simSpanTo,
+        )
+      ) {
+        setRepairStartedIncidentIds((prev) => new Set(prev).add(selectedIncident.id));
+      }
       try {
         const dtData = await api.fetchDTs();
         setDts(dtData);
@@ -528,7 +587,12 @@ export default function App() {
     setSelectedDTId(null);
     setFocusedPole(null);
   };
-  const selectedLifecycle = selectedIncident ? getLifecycleStage(selectedIncident.status) : null;
+  const selectedLifecycle = selectedIncident
+    ? getLifecycleStage(selectedIncident.status, {
+        restorationTelemetryReady: selectedIncident.restoration_telemetry_ready,
+        repairStarted: repairStartedIncidentIds.has(selectedIncident.id),
+      })
+    : null;
   const clampMapZoom = (value: number) => Math.min(3, Math.max(1, Number(value.toFixed(1))));
   const zoomMapBy = (delta: number) => setMapZoom((current) => clampMapZoom(current + delta));
   const viewBoxWidth = 600 / mapZoom;

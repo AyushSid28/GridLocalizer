@@ -14,7 +14,7 @@ services:
       - key: TELEMETRY_STREAM
         value: telemetry.inbound
       - key: DETECT_WAIT_SEC
-        value: "30"
+        value: "10"
       - key: GROQ_API_KEY
         sync: false
       - key: CORS_ORIGINS
@@ -36,4 +36,4 @@ services:
       - key: TELEMETRY_STREAM
         value: telemetry.inbound
       - key: DETECT_WAIT_SEC
-        value: "30"
+        value: "10"

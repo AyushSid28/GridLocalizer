@@ -33,7 +33,7 @@ Committed template: `.env.example`.
 | `DATABASE_URL` | yes (compose sets it) | local Postgres URL | SQLAlchemy DSN |
 | `REDIS_URL` | yes | `redis://redis:6379/0` | Telemetry stream |
 | `TELEMETRY_STREAM` | no | `telemetry.inbound` | Redis stream key |
-| `DETECT_WAIT_SEC` | no | `30` | Debounce before localize |
+| `DETECT_WAIT_SEC` | no | `10` | Debounce before localize |
 | `CORS_ORIGINS` | no | localhost Vite/web | Allowed browser origins |
 | `GROQ_API_KEY` | no | empty | LLM explain (preferred) |
 | `OPENAI_API_KEY` | no | empty | LLM explain fallback |
