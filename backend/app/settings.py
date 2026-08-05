@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     telemetry_stream: str = "telemetry.inbound"
     detect_wait_sec: int = 3
     expose_error_details: bool = False
+    allow_demo_admin: bool = False
     cors_origins: str = (
         "http://localhost:5173,http://localhost:3000,"
         "https://gridlocalizer.vercel.app,https://www.gridlocalizer.vercel.app"

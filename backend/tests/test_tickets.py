@@ -1,5 +1,6 @@
 import pytest
 from datetime import datetime, timezone
+from fastapi import HTTPException
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.compiler import compiles
@@ -19,6 +20,7 @@ from app.models import (
 from app.services.localization import check_incident_restorations
 from app.services.topo_index import refresh_topology
 from app.api.incidents import resolve_incident, acknowledge_incident, assign_crew, CrewAssignmentIn
+from app.api.sim import repair_fault, FaultInjectionIn
 
 @compiles(JSONB, "sqlite")
 def compile_jsonb_sqlite(type_, compiler, **kw):
@@ -102,42 +104,90 @@ def test_ticket_fsm_transitions_and_pushback(test_db):
     assert res["status"] == "crew_assigned"
     assert res["crew_label"] == "Crew A"
 
-    # Resolve marks repair complete, but does not close while telemetry is dark.
-    res = resolve_incident("INC-1", test_db)
-    assert res["status"] == "resolved"
-    assert "Waiting for power_restored and boot telemetry" in res["note"]
-    assert test_db.get(Incident, "INC-1").status == TicketStatus.resolved
+    with pytest.raises(HTTPException) as exc:
+        resolve_incident("INC-1", test_db)
+    assert exc.value.status_code == 409
 
-    restored = check_incident_restorations(test_db)
-    assert restored == []
-    assert test_db.get(Incident, "INC-1").status == TicketStatus.resolved
-
-    # Energized alone is not enough for closure.
     state = test_db.get(PoleState, "P-01")
     state.energized = True
-    test_db.commit()
-
-    restored = check_incident_restorations(test_db)
-    assert restored == []
-    assert test_db.get(Incident, "INC-1").status == TicketStatus.resolved
-
-    # power_restored alone is still not enough.
     state.last_power_restored_seq = 2
     state.last_power_restored_at = datetime.now(timezone.utc)
-    test_db.commit()
-
-    restored = check_incident_restorations(test_db)
-    assert restored == []
-    assert test_db.get(Incident, "INC-1").status == TicketStatus.resolved
-
-    # boot + power_restored verifies and closes.
     state.last_boot_seq = 3
     state.last_boot_at = datetime.now(timezone.utc)
     test_db.commit()
 
-    restored = check_incident_restorations(test_db)
-    assert len(restored) == 1
+    res = resolve_incident("INC-1", test_db)
+    assert res["status"] == "closed"
     assert test_db.get(Incident, "INC-1").status == TicketStatus.closed
+
+
+def test_ticket_fsm_transitions_and_pushback_legacy_telemetry_steps(test_db):
+    """Document verifier requirements step-by-step after resolve (historical path)."""
+    inc = Incident(
+        id="INC-1B",
+        kind=FaultKind.dt,
+        status=TicketStatus.detected,
+        feeder_id="F-TEST",
+        dt_id="DT-1",
+        affected_poles=1,
+    )
+    test_db.add(inc)
+    test_db.commit()
+
+    acknowledge_incident("INC-1B", test_db)
+    assign_crew("INC-1B", CrewAssignmentIn(crew_label="Crew A"), test_db)
+
+    state = test_db.get(PoleState, "P-01")
+    state.energized = True
+    state.last_power_restored_seq = 2
+    state.last_power_restored_at = datetime.now(timezone.utc)
+    state.last_boot_seq = 3
+    state.last_boot_at = datetime.now(timezone.utc)
+    test_db.commit()
+
+    res = resolve_incident("INC-1B", test_db)
+    assert res["status"] == "closed"
+    assert "Restoration automatically verified" in test_db.get(Incident, "INC-1B").verify_note
+
+
+def test_repair_does_not_skip_crew_workflow(test_db):
+    from unittest.mock import MagicMock
+
+    inc = Incident(
+        id="INC-CREW",
+        kind=FaultKind.dt,
+        status=TicketStatus.crew_assigned,
+        feeder_id="F-TEST",
+        dt_id="DT-1",
+        affected_poles=1,
+        crew_label="Crew B",
+    )
+    test_db.add(inc)
+    test_db.commit()
+
+    r_mock = MagicMock()
+    pipe = MagicMock()
+    r_mock.pipeline.return_value = pipe
+    settings_mock = MagicMock()
+    settings_mock.telemetry_stream = "test.telemetry"
+
+    repair_fault(
+        FaultInjectionIn(kind="dt", target_id="DT-1"),
+        db=test_db,
+        r=r_mock,
+        settings=settings_mock,
+    )
+
+    test_db.refresh(inc)
+    assert inc.status == TicketStatus.crew_assigned
+
+    state = test_db.get(PoleState, "P-01")
+    assert state.energized is True
+    assert state.last_power_restored_seq is not None
+    assert state.last_boot_seq is not None
+
+    res = resolve_incident("INC-CREW", test_db)
+    assert res["status"] == "closed"
 
 
 def test_auto_verify_restoration(test_db):

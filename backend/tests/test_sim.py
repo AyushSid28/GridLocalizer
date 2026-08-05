@@ -17,6 +17,7 @@ from app.models import (
     PoleState,
     ProcessedEvent,
     ScheduledOutage,
+    TicketStatus,
     TopologySource,
 )
 from app.services.topo_index import refresh_topology
@@ -151,6 +152,7 @@ def test_noise_injection(test_db):
     # Noise is also published as telemetry only.
     state = test_db.get(PoleState, "P-01")
     assert state.energized is True
+    assert state.suspect_sensor is True
     assert r_mock.xadd.call_count == 1
     payload = json.loads(r_mock.xadd.call_args.args[1]["payload"])
     assert payload["event"] == "heartbeat"
@@ -167,6 +169,8 @@ def test_noise_injection(test_db):
     )
     assert res["noise_cleared"] is True
     assert res["target_id"] == "P-01"
+    state = test_db.get(PoleState, "P-01")
+    assert state.suspect_sensor is False
     payload = json.loads(r_mock.xadd.call_args.args[1]["payload"])
     assert payload["event"] == "heartbeat"
     assert payload["energized"] is True
@@ -336,3 +340,76 @@ def test_multi_dt_scenario_publishes_without_500(test_db):
     assert len(incidents) == 3
     assert {inc.kind for inc in incidents} == {FaultKind.dt}
     assert {inc.dt_id for inc in incidents} == {"D-0003", "D-0006", "D-0008"}
+
+
+def test_repair_does_not_auto_close_resolved_incident(test_db):
+    r_mock, _pipe = _redis_with_pipeline()
+    settings_mock = MagicMock()
+    settings_mock.telemetry_stream = "test.telemetry"
+
+    inc = Incident(
+        id="INC-RESOLVED",
+        kind=FaultKind.dt,
+        status=TicketStatus.resolved,
+        feeder_id="F-TEST",
+        dt_id="DT-1",
+        affected_poles=1,
+    )
+    test_db.add(inc)
+    test_db.commit()
+
+    repair_fault(
+        FaultInjectionIn(kind="dt", target_id="DT-1"),
+        db=test_db,
+        r=r_mock,
+        settings=settings_mock,
+    )
+
+    test_db.refresh(inc)
+    assert inc.status == TicketStatus.resolved
+
+
+def test_scenario_partial_success(test_db):
+    r_mock, _pipe = _redis_with_pipeline()
+    settings_mock = MagicMock()
+    settings_mock.telemetry_stream = "test.telemetry"
+
+    res = run_scenario(
+        ScenarioIn(
+            faults=[
+                ScenarioFault(kind="dt", target_id="DT-1"),
+                ScenarioFault(kind="dt", target_id="D-MISSING"),
+            ]
+        ),
+        db=test_db,
+        r=r_mock,
+        settings=settings_mock,
+    )
+
+    assert res["status"] == "partial"
+    assert res["affected_devices"] == 1
+    assert len(res["results"]) == 2
+    assert res["results"][0]["ok"] is True
+    assert res["results"][1]["ok"] is False
+
+
+def test_scenario_noise_batch(test_db):
+    r_mock = MagicMock()
+    settings_mock = MagicMock()
+    settings_mock.telemetry_stream = "test.telemetry"
+
+    res = run_scenario(
+        ScenarioIn(
+            faults=[
+                ScenarioFault(kind="noise", target_id="P-01", noise_kind="dead_sensor"),
+            ]
+        ),
+        db=test_db,
+        r=r_mock,
+        settings=settings_mock,
+    )
+
+    assert res["status"] == "injected"
+    assert res["results"][0]["ok"] is True
+    state = test_db.get(PoleState, "P-01")
+    assert state.suspect_sensor is True

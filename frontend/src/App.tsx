@@ -88,6 +88,7 @@ type Incident = {
   } | null;
   created_at: string | null;
   closed_at: string | null;
+  restoration_telemetry_ready?: boolean;
   evidence?: {
     positive: string[];
     negative: string[];
@@ -196,8 +197,8 @@ function getLifecycleStage(status: Incident["status"]) {
   const activeIndex: Record<Incident["status"], number> = {
     detected: 1,
     acknowledged: 2,
-    crew_assigned: 4,
-    resolved: 5,
+    crew_assigned: 3,
+    resolved: 6,
     verified: 6,
     closed: 7,
   };
@@ -418,7 +419,11 @@ export default function App() {
           span_to: simSpanTo || undefined,
         });
       }
-      setSimResponse(`Success: ${action === "inject" ? "Outage injected" : "Outage repaired"} (${data.affected_devices} telemetry devices signaled)`);
+      setSimResponse(
+        data.warning
+          ? `Warning: ${data.warning} (${data.affected_devices ?? 0} devices signaled)`
+          : `Success: ${action === "inject" ? "Outage injected" : "Outage repaired"} (${data.affected_devices} telemetry devices signaled)`,
+      );
       try {
         const dtData = await api.fetchDTs();
         setDts(dtData);
@@ -1084,14 +1089,42 @@ export default function App() {
                     )}
 
                     {selectedIncident.status === "crew_assigned" && (
-                      <button className="btn btn-success" onClick={() => handleResolve(selectedIncident.id)}>
-                        Resolve
-                      </button>
+                      <div className="crew-resolve-block">
+                        {!selectedIncident.restoration_telemetry_ready && (
+                          <div className="verify-note restore-hint">
+                            <strong>Restoration telemetry required</strong>
+                            <p>
+                              Crew is on site, but the ticket cannot close until measured restore. Use{" "}
+                              <em>Simulation → Repair</em> for the same scope (DT, span, feeder, or pole) to
+                              publish <code>power_restored</code> and <code>boot</code> events.
+                            </p>
+                          </div>
+                        )}
+                        <button
+                          className="btn btn-success"
+                          disabled={!selectedIncident.restoration_telemetry_ready}
+                          title={
+                            selectedIncident.restoration_telemetry_ready
+                              ? "Confirm field repair after telemetry shows restore"
+                              : "Run Simulation Repair first"
+                          }
+                          onClick={() => handleResolve(selectedIncident.id)}
+                        >
+                          Confirm repair (resolve)
+                        </button>
+                      </div>
                     )}
 
-                    {(selectedIncident.status === "resolved" || selectedIncident.status === "closed") && (
+                    {selectedIncident.status === "resolved" && (
                       <div className="verify-note">
-                        <strong>{selectedIncident.status === "resolved" ? "Awaiting Verification" : "Resolved"}</strong>
+                        <strong>Verifying restoration</strong>
+                        <p>{selectedIncident.verify_note || "Waiting for automatic telemetry verification..."}</p>
+                      </div>
+                    )}
+
+                    {selectedIncident.status === "closed" && (
+                      <div className="verify-note">
+                        <strong>Resolved</strong>
                         <p>{selectedIncident.verify_note || "System waiting for automatic closure..."}</p>
                       </div>
                     )}

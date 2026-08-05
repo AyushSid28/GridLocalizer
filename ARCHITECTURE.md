@@ -94,7 +94,12 @@ Complexity: O(n) per dirty DT (n ≤ ~240 poles). Failure modes: wrong geo-infer
 
 `detected → acknowledged → crew_assigned → resolved → verified → closed`
 
-Resolve while poles are still dark → rejected / verify note. Restoration comes from `power_restored` / live heartbeats, not the button.
+1. **Assign crew** — field dispatch only; poles may still be dark.
+2. **Simulation → Repair** (same scope) — publishes `power_restored` + `boot` on the ingest path (the only way to simulate measured restore in the demo).
+3. **Confirm repair (resolve)** — allowed only after restoration telemetry is present on affected reporting poles; otherwise the API returns **409**.
+4. **Verifier** — auto-closes to `verified`/`closed` when telemetry checks pass.
+
+Repair does **not** auto-close tickets. Resolve while still dark is **rejected**, not queued.
 
 ---
 

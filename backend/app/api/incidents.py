@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 from app.db import get_db
 from app.models import Incident, ScheduledOutage, TicketStatus
+from app.services.localization import check_incident_restorations, is_incident_restored
 from app.settings import get_settings
 import httpx
 
@@ -81,6 +82,11 @@ def list_incidents(db: Session = Depends(get_db)) -> list[dict]:
             "updated_at": r.updated_at.isoformat() if r.updated_at else None,
             "verified_at": r.verified_at.isoformat() if r.verified_at else None,
             "closed_at": r.closed_at.isoformat() if r.closed_at else None,
+            "restoration_telemetry_ready": (
+                is_incident_restored(db, r)
+                if r.status in (TicketStatus.crew_assigned, TicketStatus.resolved)
+                else False
+            ),
         }
         for r in rows
     ]
@@ -135,9 +141,24 @@ def resolve_incident(incident_id: str, db: Session = Depends(get_db)) -> dict:
             detail=f"Cannot resolve incident in status {inc.status.value}. Crew must be assigned first.",
         )
 
+    if not is_incident_restored(db, inc):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Affected poles are still dark or restoration telemetry is missing. "
+                "Use Simulation → Repair for this fault scope (DT, span, feeder, or pole) "
+                "to publish power_restored and boot events before resolving."
+            ),
+        )
+
     inc.status = TicketStatus.resolved
-    inc.verify_note = "Repair marked complete. Waiting for power_restored and boot telemetry before automatic closure."
+    inc.verify_note = (
+        "Field repair acknowledged. Closure requires verified power_restored and boot telemetry "
+        "across affected reporting poles."
+    )
     db.commit()
+    check_incident_restorations(db)
+    db.refresh(inc)
     return {
         "id": inc.id,
         "status": inc.status.value,

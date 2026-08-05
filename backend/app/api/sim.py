@@ -7,11 +7,12 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, status
 import redis
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models import FaultKind, Pole, PoleState, Incident, TicketStatus
+from app.services.localization import check_incident_restorations
 from app.services.topo_index import get_topology
 from app.settings import get_settings, Settings
 
@@ -80,10 +81,11 @@ def _closed_incident_exists_for_asset(db: Session, inc: Incident) -> bool:
 
 
 class ScenarioFault(BaseModel):
-    kind: Literal["feeder", "dt", "span", "pole"]
+    kind: Literal["feeder", "dt", "span", "pole", "noise"]
     target_id: str | None = None
     span_from: str | None = None
     span_to: str | None = None
+    noise_kind: Literal["dead_sensor", "duplicate", "delayed", "reorder"] | None = "dead_sensor"
 
 
 class ScenarioIn(BaseModel):
@@ -282,6 +284,7 @@ def inject_fault(
             "affected_devices": 0,
             "poles_in_scope": 0,
             "unmonitored_poles": 0,
+            "warning": "No poles matched this fault scope; check target IDs.",
         }
 
     _clear_closed_incidents_for_inject(db, data)
@@ -321,49 +324,12 @@ def inject_fault(
         "affected_devices": affected_count,
         "poles_in_scope": len(poles),
         "unmonitored_poles": len(poles) - affected_count,
+        **(
+            {"warning": "Scope has poles but none have telemetry devices; map may not change until worker runs."}
+            if affected_count == 0 and len(poles) > 0
+            else {}
+        ),
     }
-
-
-def _auto_close_incidents_for_repair(
-    db: Session, data: FaultInjectionIn, now: datetime
-) -> None:
-    """Close open tickets that match the repaired outage scope (all fault kinds)."""
-    note = "Auto-closed via synchronous repair API"
-    stmt = None
-
-    if data.kind == "dt" and data.target_id:
-        stmt = select(Incident).where(
-            Incident.dt_id == data.target_id,
-            Incident.status != TicketStatus.closed,
-        )
-    elif data.kind == "feeder" and data.target_id:
-        stmt = select(Incident).where(
-            Incident.feeder_id == data.target_id,
-            Incident.status != TicketStatus.closed,
-        )
-    elif data.kind == "span" and data.span_to:
-        conditions = [
-            Incident.kind == FaultKind.span,
-            Incident.span_to == data.span_to,
-            Incident.status != TicketStatus.closed,
-        ]
-        if data.span_from:
-            conditions.append(Incident.span_from == data.span_from)
-        stmt = select(Incident).where(*conditions)
-    elif data.kind == "pole" and data.target_id:
-        stmt = select(Incident).where(
-            Incident.kind == FaultKind.span,
-            Incident.span_to == data.target_id,
-            Incident.status != TicketStatus.closed,
-        )
-
-    if stmt is None:
-        return
-
-    for inc in db.scalars(stmt).all():
-        inc.status = TicketStatus.closed
-        inc.closed_at = now
-        inc.verify_note = note
 
 
 @router.post("/repair", status_code=status.HTTP_202_ACCEPTED)
@@ -441,15 +407,14 @@ def repair_fault(
     except redis.RedisError as e:
         log.warning("Redis pipeline failed during repair (DB state still updated): %s", e)
 
-    # Auto-close related active incidents immediately for fast demo
-    _auto_close_incidents_for_repair(db, data, now)
-
     try:
         db.commit()
     except Exception as e:
         db.rollback()
         import logging
         logging.getLogger(__name__).warning("Concurrency error during sync repair commit, falling back to worker: %s", e)
+    else:
+        check_incident_restorations(db)
 
     # Trigger dirty flag
     for dt_id in dt_ids:
@@ -470,29 +435,50 @@ def inject_noise(
     r: redis.Redis = Depends(get_redis_client),
     settings: Settings = Depends(get_settings),
 ) -> dict:
+    return _apply_noise(db, r, settings, data)
+
+
+def _apply_noise(
+    db: Session,
+    r: redis.Redis,
+    settings: Settings,
+    data: NoiseInjectionIn,
+) -> dict:
     pole = db.get(Pole, data.target_id)
     if not pole:
         raise HTTPException(404, f"Pole {data.target_id} not found")
 
     state = db.get(PoleState, pole.id)
     fw = state.firmware if state else "1.4.2"
+    now = datetime.now(timezone.utc)
 
     if data.kind == "dead_sensor":
         if pole.device_id:
-            current_energized = state.energized if state and state.energized is not None else True
+            if state is None:
+                state = PoleState(pole_id=pole.id, device_id=pole.device_id, firmware=fw)
+                db.add(state)
+            current_energized = state.energized if state.energized is not None else True
+            state.suspect_sensor = True
+            state.last_seen_at = now - timedelta(seconds=400)
+            state.energized = current_energized
+            state.last_event = "heartbeat"
+            seq = next_seq(state)
+            state.last_seq = seq
+            db.flush()
             publish_event(
                 r,
                 settings.telemetry_stream,
                 pole,
                 "heartbeat",
                 current_energized,
-                next_seq(state),
-                datetime.now(timezone.utc) - timedelta(seconds=400),
+                seq,
+                state.last_seen_at,
                 fw,
                 3300,
                 -95,
             )
             r.set(f"dt_dirty:{pole.dt_id}", time.time())
+            db.commit()
 
         return {"noise_injected": True, "kind": "dead_sensor", "pole_id": pole.id}
 
@@ -574,23 +560,48 @@ def clear_noise(
 
     state = db.get(PoleState, pole.id)
     fw = state.firmware if state else "1.4.2"
+    now = datetime.now(timezone.utc)
 
     if pole.device_id:
+        seq = next_seq(state)
         publish_event(
             r,
             settings.telemetry_stream,
             pole,
             "heartbeat",
             True,
-            next_seq(state),
-            datetime.now(timezone.utc),
+            seq,
+            now,
             fw,
             3800,
             -70,
         )
+        if state is None:
+            state = PoleState(pole_id=pole.id, device_id=pole.device_id, firmware=fw)
+            db.add(state)
+        state.suspect_sensor = False
+        state.energized = True
+        state.last_event = "heartbeat"
+        state.last_seen_at = now
+        state.last_seq = seq
+        db.commit()
         r.set(f"dt_dirty:{pole.dt_id}", time.time())
+    else:
+        db.commit()
 
     return {"noise_cleared": True, "target_id": pole.id}
+
+
+@router.post("/demo/purge_closed_incidents", status_code=status.HTTP_200_OK)
+def purge_closed_incidents(
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    if not settings.allow_demo_admin:
+        raise HTTPException(status_code=403, detail="Demo admin endpoints are disabled")
+    result = db.execute(delete(Incident).where(Incident.status == TicketStatus.closed))
+    db.commit()
+    return {"purged": result.rowcount or 0}
 
 
 @router.post("/scenario", status_code=status.HTTP_202_ACCEPTED)
@@ -611,23 +622,75 @@ def run_scenario(
         log.info("Scenario simulation requested: %s", payload_for_log)
 
         pipe = r.pipeline()
+        outcomes: list[dict] = []
         for fault in data.faults:
+            if fault.kind == "noise":
+                pole_id = fault.target_id.strip() if fault.target_id else None
+                if not pole_id:
+                    outcomes.append(
+                        {"kind": "noise", "ok": False, "error": "target_id required for noise"}
+                    )
+                    continue
+                try:
+                    nk = fault.noise_kind or "dead_sensor"
+                    _apply_noise(
+                        db,
+                        r,
+                        settings,
+                        NoiseInjectionIn(kind=nk, target_id=pole_id),
+                    )
+                    outcomes.append(
+                        {"kind": "noise", "ok": True, "target_id": pole_id, "noise_kind": nk}
+                    )
+                except HTTPException as exc:
+                    outcomes.append(
+                        {
+                            "kind": "noise",
+                            "ok": False,
+                            "target_id": pole_id,
+                            "error": str(exc.detail),
+                        }
+                    )
+                continue
+
             fault_in = FaultInjectionIn(
                 kind=fault.kind,
                 target_id=fault.target_id.strip() if fault.target_id else None,
                 span_from=fault.span_from.strip() if fault.span_from else None,
                 span_to=fault.span_to.strip() if fault.span_to else None,
             )
-            poles = get_affected_poles(db, fault_in)
+            try:
+                poles = get_affected_poles(db, fault_in)
+            except HTTPException as exc:
+                outcomes.append(
+                    {
+                        "kind": fault.kind,
+                        "ok": False,
+                        "target": fault_in.target_id
+                        or f"{fault_in.span_from}->{fault_in.span_to}",
+                        "error": str(exc.detail),
+                    }
+                )
+                continue
+
             if not poles:
                 target = fault_in.target_id or f"{fault_in.span_from}->{fault_in.span_to}"
-                raise HTTPException(404, f"No poles found for {fault.kind} fault target {target}")
+                outcomes.append(
+                    {"kind": fault.kind, "ok": False, "target": target, "error": "no poles in scope"}
+                )
+                continue
 
             _clear_closed_incidents_for_inject(db, fault_in)
 
             pole_ids = [p.id for p in poles]
-            states = {s.pole_id: s for s in db.scalars(select(PoleState).where(PoleState.pole_id.in_(pole_ids))).all()}
+            states = {
+                s.pole_id: s
+                for s in db.scalars(
+                    select(PoleState).where(PoleState.pole_id.in_(pole_ids))
+                ).all()
+            }
 
+            fault_affected = 0
             for p in poles:
                 all_dt_ids.add(p.dt_id)
                 if mark_pole_dark(
@@ -639,7 +702,24 @@ def run_scenario(
                     state=states.get(p.id),
                     pipe=pipe,
                 ):
+                    fault_affected += 1
                     total_affected += 1
+
+            outcomes.append(
+                {
+                    "kind": fault.kind,
+                    "ok": True,
+                    "target": fault_in.target_id
+                    or f"{fault_in.span_from}->{fault_in.span_to}",
+                    "affected_devices": fault_affected,
+                }
+            )
+
+        if not any(item.get("ok") for item in outcomes):
+            raise HTTPException(
+                status_code=400,
+                detail={"message": "No scenario faults could be applied", "results": outcomes},
+            )
 
         try:
             pipe.execute()
@@ -651,7 +731,13 @@ def run_scenario(
         for dt_id in all_dt_ids:
             r.set(f"dt_dirty:{dt_id}", time.time())
 
-        return {"status": "injected", "affected_devices": total_affected, "dts": sorted(all_dt_ids)}
+        status = "injected" if all(item.get("ok") for item in outcomes) else "partial"
+        return {
+            "status": status,
+            "affected_devices": total_affected,
+            "dts": sorted(all_dt_ids),
+            "results": outcomes,
+        }
     except HTTPException:
         raise
     except Exception as exc:

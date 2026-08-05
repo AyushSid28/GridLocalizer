@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import * as api from '../api';
 
-type FaultKind = 'feeder' | 'dt' | 'span' | 'pole';
+type FaultKind = 'feeder' | 'dt' | 'span' | 'pole' | 'noise';
 
 type Fault = {
   id: number | string;
@@ -9,6 +9,7 @@ type Fault = {
   target_id?: string;
   span_from?: string;
   span_to?: string;
+  noise_kind?: 'dead_sensor' | 'duplicate' | 'delayed' | 'reorder';
 };
 
 type DT = {
@@ -52,7 +53,12 @@ function clearLastInjectedScenario() {
 
 function faultTargetKey(f: Fault): string {
   if (f.kind === 'span') return `span:${f.span_from ?? ''}:${f.span_to ?? ''}`;
+  if (f.kind === 'noise') return `noise:${f.target_id ?? ''}:${f.noise_kind ?? 'dead_sensor'}`;
   return `${f.kind}:${f.target_id ?? ''}`;
+}
+
+function isOutageFault(f: Fault): boolean {
+  return f.kind !== 'noise';
 }
 
 function incidentMatchesFault(incident: RestorableIncident, fault: Fault): boolean {
@@ -72,8 +78,9 @@ function incidentMatchesFault(incident: RestorableIncident, fault: Fault): boole
 }
 
 function scenarioStillActive(faults: Fault[], incidents: RestorableIncident[]): boolean {
-  if (faults.length === 0) return false;
-  return faults.some((fault) =>
+  const outageFaults = faults.filter(isOutageFault);
+  if (outageFaults.length === 0) return false;
+  return outageFaults.some((fault) =>
     incidents.some(
       (inc) =>
         RESTORABLE_STATUSES.has(inc.status) && incidentMatchesFault(inc, fault),
@@ -98,6 +105,7 @@ const MultifaultSelector: React.FC<MultifaultSelectorProps> = ({ dts, feeders, i
   const [targetId, setTargetId] = useState('');
   const [spanFrom, setSpanFrom] = useState('');
   const [spanTo, setSpanTo] = useState('');
+  const [noiseKind, setNoiseKind] = useState<'dead_sensor' | 'duplicate' | 'delayed' | 'reorder'>('dead_sensor');
   const [isInjecting, setIsInjecting] = useState(false);
   const [isRestoring, setIsRestoring] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -126,8 +134,12 @@ const MultifaultSelector: React.FC<MultifaultSelectorProps> = ({ dts, feeders, i
       setMessage('Error: Span requires both From and To IDs');
       return;
     }
-    if (type !== 'span' && !targetId.trim()) {
+    if (type !== 'span' && type !== 'noise' && !targetId.trim()) {
       setMessage('Error: Target ID required');
+      return;
+    }
+    if (type === 'noise' && !targetId.trim()) {
+      setMessage('Error: Pole ID required for noise');
       return;
     }
     const newFault: Fault = {
@@ -136,6 +148,7 @@ const MultifaultSelector: React.FC<MultifaultSelectorProps> = ({ dts, feeders, i
       target_id: type !== 'span' ? targetId.trim() : undefined,
       span_from: type === 'span' ? spanFrom.trim() : undefined,
       span_to: type === 'span' ? spanTo.trim() : undefined,
+      noise_kind: type === 'noise' ? noiseKind : undefined,
     };
     setFaults(prev => [...prev, newFault]);
     resetDraft();
@@ -188,8 +201,17 @@ const MultifaultSelector: React.FC<MultifaultSelectorProps> = ({ dts, feeders, i
     try {
       const data = await api.createScenario(faults);
       const affected = data?.affected_devices ?? 0;
+      const results = (data?.results ?? []) as { ok?: boolean; error?: string; target?: string }[];
+      const failed = results.filter((r) => r.ok === false);
       const injectedFaults = [...faults];
-      setMessage(`Injected: ${affected} telemetry devices signaled. Click "Restore All" to undo.`);
+      if (data?.status === 'partial' || failed.length > 0) {
+        const detail = failed.map((r) => r.error || r.target).filter(Boolean).join('; ');
+        setMessage(
+          `Partial inject: ${affected} device(s) signaled; ${failed.length} fault(s) skipped.${detail ? ` (${detail})` : ''}`,
+        );
+      } else {
+        setMessage(`Injected: ${affected} telemetry devices signaled. Click "Restore All" to undo.`);
+      }
       setLastInjected(injectedFaults);
       saveLastInjectedScenario(injectedFaults);
       setFaults([]);
@@ -213,6 +235,12 @@ const MultifaultSelector: React.FC<MultifaultSelectorProps> = ({ dts, feeders, i
     setMessage(null);
     try {
       for (const f of faultsToRestore) {
+        if (f.kind === 'noise') {
+          if (f.target_id) {
+            await api.clearNoise({ target_id: f.target_id });
+          }
+          continue;
+        }
         await api.repairSimulation({
           kind: f.kind,
           target_id: f.target_id ?? null,
@@ -220,7 +248,7 @@ const MultifaultSelector: React.FC<MultifaultSelectorProps> = ({ dts, feeders, i
           span_to: f.span_to ?? null,
         });
       }
-      setMessage(`Restore telemetry sent for ${faultsToRestore.length} outage(s).`);
+      setMessage(`Restore telemetry sent for ${faultsToRestore.length} outage(s). Acknowledge crew workflow tickets, then use Confirm repair after telemetry is live.`);
       setLastInjected([]);
       clearLastInjectedScenario();
       onResult(null);
@@ -249,10 +277,19 @@ const MultifaultSelector: React.FC<MultifaultSelectorProps> = ({ dts, feeders, i
           <option value="span">Span Fault</option>
           <option value="feeder">Feeder Fault</option>
           <option value="pole">Single Pole Outage</option>
+          <option value="noise">Telemetry Noise</option>
         </select>
-        {(type === 'dt' || type === 'feeder' || type === 'pole') && (
+        {type === 'noise' && (
+          <select value={noiseKind} onChange={e => setNoiseKind(e.target.value as typeof noiseKind)}>
+            <option value="dead_sensor">Dead sensor</option>
+            <option value="duplicate">Duplicate event</option>
+            <option value="delayed">Delayed event</option>
+            <option value="reorder">Reordered events</option>
+          </select>
+        )}
+        {(type === 'dt' || type === 'feeder' || type === 'pole' || type === 'noise') && (
           <input
-            placeholder={type === 'pole' ? 'Pole ID' : 'Target ID (e.g. D-0005)'}
+            placeholder={type === 'pole' || type === 'noise' ? 'Pole ID' : 'Target ID (e.g. D-0005)'}
             value={targetId}
             onChange={e => setTargetId(e.target.value)}
           />
@@ -301,7 +338,11 @@ const MultifaultSelector: React.FC<MultifaultSelectorProps> = ({ dts, feeders, i
         )}
         {visibleFaults.map(f => (
           <li key={`${f.kind}-${faultTargetKey(f)}`} className="selected-fault-row">
-            <span>{f.kind.toUpperCase()} - {f.kind === 'span' ? `${f.span_from} to ${f.span_to}` : f.target_id}</span>
+            <span>
+              {f.kind.toUpperCase()}
+              {f.kind === 'noise' ? ` (${f.noise_kind ?? 'dead_sensor'})` : ''} -{' '}
+              {f.kind === 'span' ? `${f.span_from} to ${f.span_to}` : f.target_id}
+            </span>
             {showingLastInjected ? (
               <span className="fault-row-state">Injected</span>
             ) : (
@@ -312,7 +353,11 @@ const MultifaultSelector: React.FC<MultifaultSelectorProps> = ({ dts, feeders, i
         {showingOpenIncidents &&
           openIncidentFaults.map(f => (
             <li key={`open-${f.id}`} className="selected-fault-row">
-              <span>{f.kind.toUpperCase()} - {f.kind === 'span' ? `${f.span_from} to ${f.span_to}` : f.target_id}</span>
+              <span>
+              {f.kind.toUpperCase()}
+              {f.kind === 'noise' ? ` (${f.noise_kind ?? 'dead_sensor'})` : ''} -{' '}
+              {f.kind === 'span' ? `${f.span_from} to ${f.span_to}` : f.target_id}
+            </span>
               <span className="fault-row-state">Open ticket</span>
             </li>
           ))}
