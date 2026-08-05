@@ -94,16 +94,31 @@ type Incident = {
   };
 };
 
-const activeStatuses: Incident["status"][] = ["detected", "acknowledged", "crew_assigned", "resolved"];
+const activeStatuses: Incident["status"][] = ["detected", "acknowledged", "crew_assigned"];
+
+/** Tickets still in the field workflow (map outline / outage banner). */
+const openOutageTicketStatuses: Incident["status"][] = [
+  "detected",
+  "acknowledged",
+  "crew_assigned",
+];
 
 function isActiveIncident(incident: Incident) {
   return activeStatuses.includes(incident.status);
 }
 
+function isAwaitingVerification(incident: Incident) {
+  return incident.status === "resolved";
+}
+
+function isOpenOutageTicket(incident: Incident) {
+  return openOutageTicketStatuses.includes(incident.status);
+}
+
 function isDtSourceOutage(dtId: string, feederId: string | null, allIncidents: Incident[]): boolean {
   return allIncidents.some(
     (incident) =>
-      isActiveIncident(incident) &&
+      isOpenOutageTicket(incident) &&
       (
         (incident.kind === "dt" && incident.dt_id === dtId) ||
         (incident.kind === "feeder" && feederId !== null && incident.feeder_id === feederId)
@@ -114,7 +129,7 @@ function isDtSourceOutage(dtId: string, feederId: string | null, allIncidents: I
 function hasChildFaultTicket(dtId: string, allIncidents: Incident[]): boolean {
   return allIncidents.some(
     (incident) =>
-      isActiveIncident(incident) &&
+      isOpenOutageTicket(incident) &&
       incident.dt_id === dtId &&
       incident.kind !== "dt" &&
       incident.kind !== "feeder"
@@ -468,7 +483,9 @@ export default function App() {
   // Filter and Sort Incidents
   const sortedIncidents = incidents
     .filter(inc => {
-      if (incidentFilter === "active") return isActiveIncident(inc);
+      if (incidentFilter === "active") {
+        return isActiveIncident(inc) || isAwaitingVerification(inc);
+      }
       if (incidentFilter === "closed") return inc.status === "closed" || inc.status === "verified";
       return true;
     })
@@ -555,8 +572,8 @@ export default function App() {
           </div>
           <div className="metric">
             <span className="metric-label">Active Outages</span>
-            <span className={`metric-value ${incidents.filter(isActiveIncident).length > 0 ? "has-outage" : ""}`}>
-              {incidents.filter(isActiveIncident).length}
+            <span className={`metric-value ${incidents.some(isOpenOutageTicket) ? "has-outage" : ""}`}>
+              {incidents.filter(isOpenOutageTicket).length}
             </span>
           </div>
           <div className="metric">
@@ -782,7 +799,7 @@ export default function App() {
                     // Check if this span is faulted (highlighted)
                     const isFaultedSpan = incidents.some(
                       i => i.dt_id === selectedDTId &&
-                           isActiveIncident(i) &&
+                           isOpenOutageTicket(i) &&
                            i.span_from === parent.pole_id &&
                            i.span_to === pole.pole_id
                     );

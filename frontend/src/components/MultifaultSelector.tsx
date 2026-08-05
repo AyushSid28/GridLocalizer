@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import * as api from '../api';
 
 type FaultKind = 'feeder' | 'dt' | 'span' | 'pole';
@@ -26,11 +26,14 @@ type RestorableIncident = {
   span_to: string | null;
 };
 
+/** Session-only — avoids stale D-0028 / D-0035 from old demos in localStorage. */
 const LAST_SCENARIO_KEY = 'grid:lastInjectedScenario';
+
+const RESTORABLE_STATUSES = new Set(['detected', 'acknowledged', 'crew_assigned']);
 
 function loadLastInjectedScenario(): Fault[] {
   try {
-    const raw = window.localStorage.getItem(LAST_SCENARIO_KEY);
+    const raw = window.sessionStorage.getItem(LAST_SCENARIO_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? parsed : [];
@@ -40,11 +43,42 @@ function loadLastInjectedScenario(): Fault[] {
 }
 
 function saveLastInjectedScenario(faults: Fault[]) {
-  window.localStorage.setItem(LAST_SCENARIO_KEY, JSON.stringify(faults));
+  window.sessionStorage.setItem(LAST_SCENARIO_KEY, JSON.stringify(faults));
 }
 
 function clearLastInjectedScenario() {
-  window.localStorage.removeItem(LAST_SCENARIO_KEY);
+  window.sessionStorage.removeItem(LAST_SCENARIO_KEY);
+}
+
+function faultTargetKey(f: Fault): string {
+  if (f.kind === 'span') return `span:${f.span_from ?? ''}:${f.span_to ?? ''}`;
+  return `${f.kind}:${f.target_id ?? ''}`;
+}
+
+function incidentMatchesFault(incident: RestorableIncident, fault: Fault): boolean {
+  if (fault.kind === 'dt' && incident.kind === 'dt') {
+    return incident.dt_id === fault.target_id;
+  }
+  if (fault.kind === 'feeder' && incident.kind === 'feeder') {
+    return incident.feeder_id === fault.target_id;
+  }
+  if (fault.kind === 'span' && incident.kind === 'span') {
+    return incident.span_to === fault.span_to;
+  }
+  if (fault.kind === 'pole' && incident.kind === 'span') {
+    return incident.span_to === fault.target_id;
+  }
+  return false;
+}
+
+function scenarioStillActive(faults: Fault[], incidents: RestorableIncident[]): boolean {
+  if (faults.length === 0) return false;
+  return faults.some((fault) =>
+    incidents.some(
+      (inc) =>
+        RESTORABLE_STATUSES.has(inc.status) && incidentMatchesFault(inc, fault),
+    ),
+  );
 }
 
 interface MultifaultSelectorProps {
@@ -59,8 +93,7 @@ const MultifaultSelector: React.FC<MultifaultSelectorProps> = ({ dts, feeders, i
   void feeders;
 
   const [faults, setFaults] = useState<Fault[]>([]);
-  // Remember the last injected faults so Restore can replay them
-  const [lastInjected, setLastInjected] = useState<Fault[]>(loadLastInjectedScenario);
+  const [lastInjected, setLastInjected] = useState<Fault[]>([]);
   const [type, setType] = useState<FaultKind>('dt');
   const [targetId, setTargetId] = useState('');
   const [spanFrom, setSpanFrom] = useState('');
@@ -68,6 +101,18 @@ const MultifaultSelector: React.FC<MultifaultSelectorProps> = ({ dts, feeders, i
   const [isInjecting, setIsInjecting] = useState(false);
   const [isRestoring, setIsRestoring] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    window.localStorage.removeItem(LAST_SCENARIO_KEY);
+    const saved = loadLastInjectedScenario();
+    if (saved.length === 0) return;
+    if (scenarioStillActive(saved, incidents)) {
+      setLastInjected(saved);
+    } else {
+      clearLastInjectedScenario();
+      setLastInjected([]);
+    }
+  }, [incidents]);
 
   const resetDraft = () => {
     setTargetId('');
@@ -101,32 +146,38 @@ const MultifaultSelector: React.FC<MultifaultSelectorProps> = ({ dts, feeders, i
     setFaults(prev => prev.filter(f => f.id !== id));
   };
 
-  const openIncidentFaults: Fault[] = incidents.reduce<Fault[]>((acc, incident) => {
-    if (['verified', 'closed'].includes(incident.status)) return acc;
+  const clearSavedScenario = () => {
+    clearLastInjectedScenario();
+    setLastInjected([]);
+    setMessage('Cleared saved scenario from this browser tab.');
+  };
 
-      if (incident.kind === 'dt' && incident.dt_id) {
-        acc.push({ id: incident.id, kind: 'dt', target_id: incident.dt_id });
-        return acc;
-      }
-      if (incident.kind === 'feeder' && incident.feeder_id) {
-        acc.push({ id: incident.id, kind: 'feeder', target_id: incident.feeder_id });
-        return acc;
-      }
-      if (incident.kind === 'span' && incident.span_to) {
-        acc.push({
-          id: incident.id,
-          kind: 'span',
-          span_from: incident.span_from ?? undefined,
-          span_to: incident.span_to,
-        });
-        return acc;
-      }
-      if (incident.kind === 'sensor' && incident.span_to) {
-        acc.push({ id: incident.id, kind: 'pole', target_id: incident.span_to });
-        return acc;
-      }
+  const openIncidentFaults: Fault[] = incidents.reduce<Fault[]>((acc, incident) => {
+    if (!RESTORABLE_STATUSES.has(incident.status)) return acc;
+
+    if (incident.kind === 'dt' && incident.dt_id) {
+      acc.push({ id: incident.id, kind: 'dt', target_id: incident.dt_id });
       return acc;
-    }, []);
+    }
+    if (incident.kind === 'feeder' && incident.feeder_id) {
+      acc.push({ id: incident.id, kind: 'feeder', target_id: incident.feeder_id });
+      return acc;
+    }
+    if (incident.kind === 'span' && incident.span_to) {
+      acc.push({
+        id: incident.id,
+        kind: 'span',
+        span_from: incident.span_from ?? undefined,
+        span_to: incident.span_to,
+      });
+      return acc;
+    }
+    if (incident.kind === 'sensor' && incident.span_to) {
+      acc.push({ id: incident.id, kind: 'pole', target_id: incident.span_to });
+      return acc;
+    }
+    return acc;
+  }, []);
 
   const injectFaults = async () => {
     if (faults.length === 0) {
@@ -158,7 +209,6 @@ const MultifaultSelector: React.FC<MultifaultSelectorProps> = ({ dts, feeders, i
       setMessage('No open outage incidents available to restore.');
       return;
     }
-    setLastInjected(faultsToRestore);
     setIsRestoring(true);
     setMessage(null);
     try {
@@ -181,11 +231,13 @@ const MultifaultSelector: React.FC<MultifaultSelectorProps> = ({ dts, feeders, i
     }
   };
 
-  const savedInjected = lastInjected.length > 0 ? lastInjected : loadLastInjectedScenario();
+  const savedInjected = lastInjected;
   const restoreCount = savedInjected.length || openIncidentFaults.length;
-  const visibleFaults = faults.length > 0 ? faults : (savedInjected.length > 0 ? savedInjected : openIncidentFaults);
+  const visibleFaults =
+    faults.length > 0 ? faults : savedInjected.length > 0 ? savedInjected : [];
   const showingLastInjected = faults.length === 0 && savedInjected.length > 0;
-  const showingOpenIncidents = faults.length === 0 && savedInjected.length === 0 && openIncidentFaults.length > 0;
+  const showingOpenIncidents =
+    faults.length === 0 && savedInjected.length === 0 && openIncidentFaults.length > 0;
 
   return (
     <div className="multifault-selector">
@@ -231,22 +283,39 @@ const MultifaultSelector: React.FC<MultifaultSelectorProps> = ({ dts, feeders, i
         >
           {isRestoring ? 'Restoring...' : `Restore All${restoreCount > 0 ? ` (${restoreCount})` : ''}`}
         </button>
+
+        {(savedInjected.length > 0 || loadLastInjectedScenario().length > 0) && (
+          <button type="button" className="btn btn-secondary" onClick={clearSavedScenario}>
+            Clear saved scenario
+          </button>
+        )}
       </div>
 
       <ul className="selected-fault-list">
-        {visibleFaults.length === 0 && <li className="empty-compact">No scenario faults added</li>}
-        {showingLastInjected && <li className="empty-compact">Last injected scenario</li>}
-        {showingOpenIncidents && <li className="empty-compact">Open incidents available to restore</li>}
+        {visibleFaults.length === 0 && !showingOpenIncidents && (
+          <li className="empty-compact">No scenario faults added</li>
+        )}
+        {showingLastInjected && <li className="empty-compact">Last injected scenario (this tab)</li>}
+        {showingOpenIncidents && (
+          <li className="empty-compact">Open field tickets (detected / crew assigned)</li>
+        )}
         {visibleFaults.map(f => (
-          <li key={f.id} className="selected-fault-row">
+          <li key={`${f.kind}-${faultTargetKey(f)}`} className="selected-fault-row">
             <span>{f.kind.toUpperCase()} - {f.kind === 'span' ? `${f.span_from} to ${f.span_to}` : f.target_id}</span>
-            {showingLastInjected || showingOpenIncidents ? (
-              <span className="fault-row-state">{showingOpenIncidents ? 'Open' : 'Injected'}</span>
+            {showingLastInjected ? (
+              <span className="fault-row-state">Injected</span>
             ) : (
               <button className="btn btn-cancel" onClick={() => removeFault(f.id)}>Remove</button>
             )}
           </li>
         ))}
+        {showingOpenIncidents &&
+          openIncidentFaults.map(f => (
+            <li key={`open-${f.id}`} className="selected-fault-row">
+              <span>{f.kind.toUpperCase()} - {f.kind === 'span' ? `${f.span_from} to ${f.span_to}` : f.target_id}</span>
+              <span className="fault-row-state">Open ticket</span>
+            </li>
+          ))}
       </ul>
 
       {message && <div className="msg">{message}</div>}

@@ -19,11 +19,64 @@ router = APIRouter(prefix="/sim", tags=["simulation"])
 log = logging.getLogger(__name__)
 
 
+def _incident_asset_match(inc: Incident):
+    return (
+        Incident.kind == inc.kind,
+        Incident.feeder_id == inc.feeder_id,
+        Incident.dt_id == inc.dt_id,
+        Incident.span_from == inc.span_from,
+        Incident.span_to == inc.span_to,
+    )
+
+
 class FaultInjectionIn(BaseModel):
     kind: Literal["feeder", "dt", "span", "pole"]
     target_id: str | None = None  # for feeder or dt or pole
     span_from: str | None = None  # for span
     span_to: str | None = None  # for span
+
+
+def _clear_closed_incidents_for_inject(db: Session, data: FaultInjectionIn) -> None:
+    """Remove closed tickets for this scope so inject can raise a fresh detected incident."""
+    if data.kind == "dt" and data.target_id:
+        stmt = select(Incident).where(
+            Incident.dt_id == data.target_id, Incident.status == TicketStatus.closed
+        )
+    elif data.kind == "feeder" and data.target_id:
+        stmt = select(Incident).where(
+            Incident.feeder_id == data.target_id, Incident.status == TicketStatus.closed
+        )
+    elif data.kind == "span" and data.span_to:
+        conditions = [
+            Incident.kind == FaultKind.span,
+            Incident.span_to == data.span_to,
+            Incident.status == TicketStatus.closed,
+        ]
+        if data.span_from:
+            conditions.append(Incident.span_from == data.span_from)
+        stmt = select(Incident).where(*conditions)
+    elif data.kind == "pole" and data.target_id:
+        stmt = select(Incident).where(
+            Incident.kind == FaultKind.span,
+            Incident.span_to == data.target_id,
+            Incident.status == TicketStatus.closed,
+        )
+    else:
+        return
+
+    for inc in db.scalars(stmt).all():
+        db.delete(inc)
+
+
+def _closed_incident_exists_for_asset(db: Session, inc: Incident) -> bool:
+    return (
+        db.scalar(
+            select(Incident.id)
+            .where(*_incident_asset_match(inc), Incident.status == TicketStatus.closed)
+            .limit(1)
+        )
+        is not None
+    )
 
 
 class ScenarioFault(BaseModel):
@@ -230,6 +283,8 @@ def inject_fault(
             "poles_in_scope": 0,
             "unmonitored_poles": 0,
         }
+
+    _clear_closed_incidents_for_inject(db, data)
 
     now = datetime.now(timezone.utc)
     
@@ -567,6 +622,8 @@ def run_scenario(
             if not poles:
                 target = fault_in.target_id or f"{fault_in.span_from}->{fault_in.span_to}"
                 raise HTTPException(404, f"No poles found for {fault.kind} fault target {target}")
+
+            _clear_closed_incidents_for_inject(db, fault_in)
 
             pole_ids = [p.id for p in poles]
             states = {s.pole_id: s for s in db.scalars(select(PoleState).where(PoleState.pole_id.in_(pole_ids))).all()}

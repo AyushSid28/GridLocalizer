@@ -356,6 +356,24 @@ def _incident_asset_key(inc: Incident) -> tuple:
     return (inc.kind, inc.feeder_id, inc.dt_id, inc.span_from, inc.span_to)
 
 
+def _closed_incident_exists_for_asset(db: Session, inc: Incident) -> bool:
+    return (
+        db.scalar(
+            select(Incident.id)
+            .where(
+                Incident.kind == inc.kind,
+                Incident.feeder_id == inc.feeder_id,
+                Incident.dt_id == inc.dt_id,
+                Incident.span_from == inc.span_from,
+                Incident.span_to == inc.span_to,
+                Incident.status == TicketStatus.closed,
+            )
+            .limit(1)
+        )
+        is not None
+    )
+
+
 def _refresh_detected_fields(target: Incident, source: Incident) -> None:
     target.affected_poles = source.affected_poles
     target.confidence = source.confidence
@@ -385,6 +403,10 @@ def _persist_detected_incidents(db: Session, final_incidents: list[Incident]) ->
         existing = existing_by_key.get(key)
         if existing:
             _refresh_detected_fields(existing, inc)
+        elif _closed_incident_exists_for_asset(db, inc):
+            # Do not spawn a new detected ticket while a closed record exists for this
+            # asset (prevents D-0028-style ghosts until user injects or restores power).
+            continue
         else:
             db.add(inc)
 
