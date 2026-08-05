@@ -85,6 +85,11 @@ def process_event(db, r: redis.Redis, data: dict, dirty_dts: set) -> bool:
     elif event_type == "boot":
         state.last_boot_seq = seq
         state.last_boot_at = ts
+    if energized is False:
+        state.last_boot_seq = None
+        state.last_power_restored_seq = None
+        state.last_boot_at = None
+        state.last_power_restored_at = None
     if battery_mv is not None:
         state.battery_mv = battery_mv
     if rssi is not None:

@@ -561,9 +561,18 @@ def run_global_localization(db: Session) -> list[Incident]:
     return final_incidents
 
 
+def _aware_utc(dt: datetime | None) -> datetime | None:
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
 def is_incident_restored(db: Session, inc: Incident) -> bool:
     """Check if all reporting poles affected by the incident are now energized."""
     topo = get_topology()
+    inc_created = _aware_utc(inc.created_at)
 
     # Identify affected pole IDs
     if inc.kind == FaultKind.feeder:
@@ -589,12 +598,22 @@ def is_incident_restored(db: Session, inc: Incident) -> bool:
     if not reporting_states:
         return False
 
-    return all(
-        s.energized
-        and s.last_power_restored_seq is not None
-        and s.last_boot_seq is not None
-        for s in reporting_states
-    )
+    for s in reporting_states:
+        if not s.energized:
+            return False
+        if s.last_power_restored_seq is None or s.last_boot_seq is None:
+            return False
+        if s.last_power_restored_at is None or s.last_boot_at is None:
+            return False
+        if inc_created is not None:
+            restored_at = _aware_utc(s.last_power_restored_at)
+            boot_at = _aware_utc(s.last_boot_at)
+            if restored_at is None or boot_at is None:
+                return False
+            if restored_at < inc_created or boot_at < inc_created:
+                return False
+
+    return True
 
 
 def check_incident_restorations(db: Session) -> list[Incident]:

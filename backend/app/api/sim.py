@@ -238,6 +238,11 @@ def mark_pole_dark(
     state.last_seq = seq
     state.last_seen_at = now
     state.suspect_sensor = False
+    # Outage invalidates prior restore evidence — resolve must wait for new telemetry.
+    state.last_boot_seq = None
+    state.last_power_restored_seq = None
+    state.last_boot_at = None
+    state.last_power_restored_at = None
 
     should_publish = publish
     if fw.startswith("1.2"):

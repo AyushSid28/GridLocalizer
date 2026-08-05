@@ -1,5 +1,5 @@
 import pytest
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from fastapi import HTTPException
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -108,8 +108,23 @@ def test_ticket_fsm_transitions_and_pushback(test_db):
         resolve_incident("INC-1", test_db)
     assert exc.value.status_code == 409
 
+    # Stale boot/restore from before this incident must not count as measured restore.
     state = test_db.get(PoleState, "P-01")
+    inc = test_db.get(Incident, "INC-1")
+    past = (inc.created_at or datetime.now(timezone.utc)) - timedelta(hours=1)
+    if past.tzinfo is None:
+        past = past.replace(tzinfo=timezone.utc)
     state.energized = True
+    state.last_boot_seq = 99
+    state.last_power_restored_seq = 100
+    state.last_boot_at = past
+    state.last_power_restored_at = past
+    test_db.commit()
+    with pytest.raises(HTTPException) as exc2:
+        resolve_incident("INC-1", test_db)
+    assert exc2.value.status_code == 409
+
+    state.energized = False
     state.last_power_restored_seq = 2
     state.last_power_restored_at = datetime.now(timezone.utc)
     state.last_boot_seq = 3

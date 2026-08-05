@@ -74,6 +74,17 @@ export async function fetchBreadcrumb(dtId: string) {
   return res.json();
 }
 
+export function getApiErrorMessage(errData: unknown, fallback: string): string {
+  if (!errData || typeof errData !== "object") return fallback;
+  const detail = (errData as { detail?: unknown }).detail;
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    return detail.map((item: { msg?: string }) => item.msg || JSON.stringify(item)).join("; ");
+  }
+  if (detail) return JSON.stringify(detail);
+  return fallback;
+}
+
 async function postJson(path: string, body?: unknown) {
   const res = await fetchWithTimeout(path, {
     method: "POST",
@@ -82,7 +93,7 @@ async function postJson(path: string, body?: unknown) {
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error((err as { detail?: string })?.detail ?? `HTTP ${res.status}`);
+    throw new Error(getApiErrorMessage(err, `HTTP ${res.status}`));
   }
   return res.json();
 }
