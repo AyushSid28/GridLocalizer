@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models import Pole, PoleState
+from app.models import Pole, PoleState, Incident, TicketStatus
 from app.services.topo_index import get_topology
 from app.settings import get_settings, Settings
 
@@ -289,9 +289,6 @@ def repair_fault(
         affected_count += 1
 
     # Auto-close related active incidents immediately for fast demo
-    from app.models import Incident, TicketStatus
-    from sqlalchemy import select
-    
     if data.kind == "dt" and data.target_id:
         stmt = select(Incident).where(Incident.dt_id == data.target_id, Incident.status != TicketStatus.closed)
         for inc in db.scalars(stmt).all():
