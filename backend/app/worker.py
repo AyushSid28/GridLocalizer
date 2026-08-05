@@ -19,7 +19,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger("worker")
 
 
-def process_event(db, r: redis.Redis, data: dict) -> bool:
+def process_event(db, r: redis.Redis, data: dict, dirty_dts: set) -> bool:
     """Process a single telemetry event with deduplication."""
     device_id = data["device_id"]
     seq = data["seq"]
@@ -51,14 +51,8 @@ def process_event(db, r: redis.Redis, data: dict) -> bool:
                 received_at=datetime.now(timezone.utc),
             )
         )
-        try:
-            db.commit()
-            log.info("Stale event recorded without state change: %s seq %s", pole_id, seq)
-            return True
-        except IntegrityError:
-            db.rollback()
-            log.warning("Integrity error on stale event: %s seq %s", device_id, seq)
-            return False
+        log.info("Stale event recorded without state change: %s seq %s", pole_id, seq)
+        return True
 
     # Record processing
     pe = ProcessedEvent(
@@ -99,23 +93,17 @@ def process_event(db, r: redis.Redis, data: dict) -> bool:
     # Mark suspect_sensor as False when a new event arrives (re-evaluate during localization)
     state.suspect_sensor = False
 
-    try:
-        db.commit()
-        log.info("Processed event: %s seq %s (energized=%s)", pole_id, seq, energized)
+    log.info("Processed event: %s seq %s (energized=%s)", pole_id, seq, energized)
 
-        if state_changed:
-            topo = get_topology()
-            dt_id = topo.pole_to_dt.get(pole_id)
-            if dt_id:
-                r.set(f"dt_dirty:{dt_id}", time.time())
-                log.info("Marked DT %s as dirty due to state change on pole %s", dt_id, pole_id)
+    if state_changed:
+        topo = get_topology()
+        dt_id = topo.pole_to_dt.get(pole_id)
+        if dt_id:
+            r.set(f"dt_dirty:{dt_id}", time.time())
+            dirty_dts.add(dt_id)
+            log.info("Marked DT %s as dirty due to state change on pole %s", dt_id, pole_id)
 
-        return True
-    except IntegrityError:
-        db.rollback()
-        # Might be concurrent processing
-        log.warning("Integrity error on event: %s seq %s", device_id, seq)
-        return False
+    return True
 
 
 def main() -> None:
@@ -136,49 +124,59 @@ def main() -> None:
 
     last_debounce_check = time.time()
 
+    from app.services.localization import run_global_localization
+
     while True:
         try:
             # 1. Read from the stream
             response = r.xread({stream: last_id}, count=100, block=1000)
             if response:
-                for stream_name, messages in response:
-                    for msg_id, payload in messages:
-                        raw_data = payload.get("payload")
-                        if not raw_data:
-                            last_id = msg_id
-                            continue
-
-                        data = json.loads(raw_data)
-                        with SessionLocal() as db:
-                            success = process_event(db, r, data)
-
-                        if success:
-                            last_id = msg_id
-                            r.set("telemetry:last_processed_id", last_id)
+                with SessionLocal() as db:
+                    dirty_dts = set()
+                    processed_any = False
+                    for stream_name, messages in response:
+                        for msg_id, payload in messages:
+                            raw_data = payload.get("payload")
+                            if not raw_data:
+                                last_id = msg_id
+                                continue
+    
+                            data = json.loads(raw_data)
+                            try:
+                                success = process_event(db, r, data, dirty_dts)
+                                if success:
+                                    last_id = msg_id
+                                processed_any = True
+                            except IntegrityError:
+                                db.rollback()
+                                log.warning("Integrity error on event: %s seq %s", data["device_id"], data["seq"])
+                    
+                    if processed_any:
+                        db.commit()
+                        r.set("telemetry:last_processed_id", last_id)
 
             # 2. Check for mature debounced DT state changes
             now = time.time()
             if now - last_debounce_check >= 2.0:
                 last_debounce_check = now
                 keys = r.keys("dt_dirty:*")
-                run_localizer = False
+                ready_dt_ids = set()
                 for key in keys:
                     dirty_time = float(r.get(key) or 0)
                     if now - dirty_time >= settings.detect_wait_sec:
                         dt_id = key.split(":")[-1]
                         r.delete(key)
-                        run_localizer = True
-                        log.info("DT %s dirty timer matured. Running localization.", dt_id)
+                        ready_dt_ids.add(dt_id)
+                        log.info("DT %s dirty timer matured. Queued for targeted localization.", dt_id)
 
-                if run_localizer:
+                if ready_dt_ids:
                     with SessionLocal() as db:
                         run_global_localization(db)
-                    log.info("Completed global localization run.")
+                    log.info("Completed global localization run for %d dirty DTs.", len(ready_dt_ids))
 
                 # Always check for restorations when debouncing loop runs
                 with SessionLocal() as db:
                     check_incident_restorations(db)
-
 
         except redis.RedisError as e:
             log.error("Redis connection error: %s. Retrying in 5s...", e)

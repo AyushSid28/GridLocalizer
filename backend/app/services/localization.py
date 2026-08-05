@@ -156,7 +156,7 @@ def is_suppressed_by_schedule(db: Session, feeder_id: str | None, dt_id: str | N
 
 
 
-def run_localization_for_dt(db: Session, dt_id: str) -> list[Incident]:
+def run_localization_for_dt(db: Session, dt_id: str, states_cache: dict[str, PoleState] | None = None) -> list[Incident]:
     """Analyze the states of all poles under a DT and create/update Incidents."""
     topo = get_topology()
     tree = topo.by_dt.get(dt_id)
@@ -164,8 +164,11 @@ def run_localization_for_dt(db: Session, dt_id: str) -> list[Incident]:
         return []
 
     # Get states of all poles under this DT
-    stmt = select(PoleState).where(PoleState.pole_id.in_(tree.pole_ids))
-    states = {ps.pole_id: ps for ps in db.scalars(stmt).all()}
+    if states_cache is not None:
+        states = {p_id: states_cache[p_id] for p_id in tree.pole_ids if p_id in states_cache}
+    else:
+        stmt = select(PoleState).where(PoleState.pole_id.in_(tree.pole_ids))
+        states = {ps.pole_id: ps for ps in db.scalars(stmt).all()}
 
     # Helper: get current status of a pole
     # Returns: "live", "dark", or "unknown" (no device or no state recorded)
@@ -350,13 +353,20 @@ def run_localization_for_dt(db: Session, dt_id: str) -> list[Incident]:
 
 
 def run_global_localization(db: Session) -> list[Incident]:
-    """Scan all DTs and feeders, merge into feeder faults if applicable, and save new incidents."""
+    """
+    Run fault localization across the entire grid.
+    Returns the list of final detected incidents (uncommitted to DB yet, but objects are updated).
+    """
     topo = get_topology()
+    all_dt_incidents = {}
+    feeder_to_dts = {}
     
-    # 1. Run localization for each DT
-    all_dt_incidents: dict[str, list[Incident]] = {}
+    # Pre-fetch all PoleStates to avoid N+1 queries during DT-level localization
+    all_states_cache = {s.pole_id: s for s in db.scalars(select(PoleState)).all()}
+
+    # 1. Gather DT-level & Span-level incidents
     for dt_id in topo.by_dt.keys():
-        incidents = run_localization_for_dt(db, dt_id)
+        incidents = run_localization_for_dt(db, dt_id, states_cache=all_states_cache)
         if incidents:
             all_dt_incidents[dt_id] = incidents
 
