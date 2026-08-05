@@ -18,8 +18,9 @@ htmlcov/
 *.log
 
 # Company brief + internal working notes (not submission artifacts)
-DOCS/
+EvalDocs/
 MAINDOCS/
+.clone-test/
 backend/package-lock.json
 schedule-state.txt
 .vercel
