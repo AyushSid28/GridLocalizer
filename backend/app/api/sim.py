@@ -187,6 +187,17 @@ def inject_fault(
 ) -> dict:
     poles = get_affected_poles(db, data)
     affected_count = 0
+
+    if not poles:
+        return {
+            "injected": True,
+            "kind": data.kind,
+            "target_id": data.target_id or f"{data.span_from}->{data.span_to}",
+            "affected_devices": 0,
+            "poles_in_scope": 0,
+            "unmonitored_poles": 0,
+        }
+
     now = datetime.now(timezone.utc)
     
     pole_ids = [p.id for p in poles]
@@ -196,7 +207,12 @@ def inject_fault(
         if mark_pole_dark(db, r, settings.telemetry_stream, p, now, state=states.get(p.id)):
             affected_count += 1
 
-    db.commit()
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        import logging
+        logging.getLogger(__name__).warning("Concurrency error during sync inject commit, falling back to worker: %s", e)
 
     dt_ids = {p.dt_id for p in poles}
     for dt_id in dt_ids:
@@ -221,6 +237,14 @@ def repair_fault(
 ) -> dict:
     poles = get_affected_poles(db, data)
     affected_count = 0
+
+    if not poles:
+        return {
+            "repaired": True,
+            "kind": data.kind,
+            "target_id": data.target_id or f"{data.span_from}->{data.span_to}",
+            "affected_devices": 0,
+        }
 
     now = datetime.now(timezone.utc)
     
@@ -281,7 +305,12 @@ def repair_fault(
             inc.closed_at = now
             inc.verify_note = "Auto-closed via synchronous repair API"
 
-    db.commit()
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        import logging
+        logging.getLogger(__name__).warning("Concurrency error during sync repair commit, falling back to worker: %s", e)
 
     # Trigger dirty flag
     for dt_id in dt_ids:
