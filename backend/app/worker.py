@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.db import SessionLocal
 from app.models import Pole, PoleState, ProcessedEvent
+from app.services.dt_dirty import mark_dt_dirty
 from app.services.localization import run_global_localization, check_incident_restorations
 from app.services.topo_index import get_topology, refresh_topology
 from app.settings import get_settings
@@ -104,7 +105,7 @@ def process_event(db, r: redis.Redis, data: dict, dirty_dts: set) -> bool:
         topo = get_topology()
         dt_id = topo.pole_to_dt.get(pole_id)
         if dt_id:
-            r.set(f"dt_dirty:{dt_id}", time.time())
+            mark_dt_dirty(r, dt_id)
             dirty_dts.add(dt_id)
             log.info("Marked DT %s as dirty due to state change on pole %s", dt_id, pole_id)
 

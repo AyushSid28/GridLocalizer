@@ -12,7 +12,8 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models import FaultKind, Pole, PoleState, Incident, TicketStatus
-from app.services.localization import check_incident_restorations
+from app.services.dt_dirty import mark_dt_dirty
+from app.services.localization import check_incident_restorations, run_global_localization
 from app.services.topo_index import get_topology
 from app.settings import get_settings, Settings
 
@@ -320,7 +321,12 @@ def inject_fault(
 
     dt_ids = {p.dt_id for p in poles}
     for dt_id in dt_ids:
-        r.set(f"dt_dirty:{dt_id}", time.time())
+        mark_dt_dirty(r, dt_id)
+
+    try:
+        run_global_localization(db)
+    except Exception as e:
+        log.warning("Sync localization after inject failed (worker will retry): %s", e)
 
     return {
         "injected": True,
@@ -734,7 +740,12 @@ def run_scenario(
         db.commit()
 
         for dt_id in all_dt_ids:
-            r.set(f"dt_dirty:{dt_id}", time.time())
+            mark_dt_dirty(r, dt_id)
+
+        try:
+            run_global_localization(db)
+        except Exception as e:
+            log.warning("Sync localization after scenario failed (worker will retry): %s", e)
 
         status = "injected" if all(item.get("ok") for item in outcomes) else "partial"
         return {
